@@ -268,12 +268,12 @@ class Trainer(BaseTrainer):
             import random
             impression_ids = list(set([sample.impression.impression_id for sample in dataset.samples]))
             random.seed(42)  # Reproducible sampling
-            sampled_impression_ids = set(random.sample(impression_ids, k=max(1, len(impression_ids) // 20)))
+            sampled_impression_ids = set(random.sample(impression_ids, k=max(1, len(impression_ids) // 100)))
             # Temporarily replace _samples with filtered version
             original_samples = dataset._samples
             dataset._samples = {k: v for k, v in original_samples.items() 
                                 if v.impression.impression_id in sampled_impression_ids}
-            self._logger.info(f'Eval on {len(sampled_impression_ids)} impressions ({len(dataset.samples)} samples, ~5% of data)')
+            self._logger.info(f'Eval on {len(sampled_impression_ids)} impressions ({len(dataset.samples)} samples, ~1% of data)')
         
         dataset.set_mode(Dataset.EVAL_MODE)
         if self.args.fast_eval:

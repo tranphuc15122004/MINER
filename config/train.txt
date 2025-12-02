@@ -31,7 +31,7 @@
 
 # Train args
 --npratio 4
---train_batch_size 4
+--train_batch_size 12
 --eval_batch_size 256
 --resume_from_checkpoint checkpoint/no_sapo/bestAucModel.pt
 --dataloader_drop_last

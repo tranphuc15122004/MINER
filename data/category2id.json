@@ -1,0 +1,22 @@
+{
+  "pad": 0,
+  "unk": 1,
+  "autos": 2,
+  "entertainment": 3,
+  "finance": 4,
+  "foodanddrink": 5,
+  "games": 6,
+  "health": 7,
+  "kids": 8,
+  "lifestyle": 9,
+  "middleeast": 10,
+  "movies": 11,
+  "music": 12,
+  "news": 13,
+  "northamerica": 14,
+  "sports": 15,
+  "travel": 16,
+  "tv": 17,
+  "video": 18,
+  "weather": 19
+}

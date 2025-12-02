@@ -20,13 +20,6 @@ build/
 train/*/
 !train/.gitkeep
 
-# Data files
-data/train/
-data/valid/
-data/test/
-*.tsv
-*.vec
-*.json
 
 # Logs
 *.log
