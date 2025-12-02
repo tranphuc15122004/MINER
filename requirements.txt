@@ -1,0 +1,9 @@
+# Core ML stack
+torch==1.11.0
+transformers==4.21.0
+scikit-learn==1.1.2
+tensorboard==2.9.1
+# Utilities
+numpy>=1.21.0,<2.0
+tqdm==4.64.0
+six
