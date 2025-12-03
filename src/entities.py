@@ -119,6 +119,20 @@ class Dataset(TorchDataset):
     def news_count(self) -> int:
         return self._news_id
 
+    def get_all_unique_news(self) -> List[News]:
+        """Get all unique news from the dataset for pre-encoding"""
+        unique_news = {}
+        for sample in self.samples:
+            # Add history news
+            for news in sample.clicked_news:
+                if news.news_id not in unique_news:
+                    unique_news[news.news_id] = news
+            # Add impression news
+            for news in sample.impression.news:
+                if news.news_id not in unique_news:
+                    unique_news[news.news_id] = news
+        return list(unique_news.values())
+
     def __len__(self):
         return len(self.samples)
 
@@ -135,9 +149,12 @@ def _create_sample(sample: Sample, tokenizer: PreTrainedTokenizer, category2id: 
     title_clicked_news_encoding = [news.title for news in sample.clicked_news]
     sapo_clicked_news_encoding = [news.sapo for news in sample.clicked_news]
     category_clicked_news_encoding = [news.category for news in sample.clicked_news]
+    his_news_ids = [news.news_id for news in sample.clicked_news]
+    
     title_impression_encoding = [news.title for news in sample.impression.news]
     sapo_impression_encoding = [news.sapo for news in sample.impression.news]
     category_impression_encoding = [news.category for news in sample.impression.news]
+    candidate_news_ids = [news.news_id for news in sample.impression.news]
 
     # Create tensor
     impression_id = torch.tensor(sample.impression.impression_id)
@@ -160,7 +177,8 @@ def _create_sample(sample: Sample, tokenizer: PreTrainedTokenizer, category2id: 
                 his_sapo=sapo_clicked_news_encoding, his_sapo_mask=his_sapo_mask,
                 his_category=category_clicked_news_encoding, his_mask=his_mask, title=title_impression_encoding,
                 title_mask=title_mask, sapo=sapo_impression_encoding, sapo_mask=sapo_mask,
-                category=category_impression_encoding, impression_id=impression_id, label=label)
+                category=category_impression_encoding, impression_id=impression_id, label=label,
+                his_news_ids=his_news_ids, candidate_news_ids=candidate_news_ids)
 
 
 def create_train_sample(sample: Sample, tokenizer: PreTrainedTokenizer, num_category: int) -> dict:

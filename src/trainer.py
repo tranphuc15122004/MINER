@@ -101,9 +101,21 @@ class Trainer(BaseTrainer):
         # Create optimizer and scheduler
         optimizer_params = self._get_optimizer_params(model)
         optimizer = AdamW(optimizer_params, lr=args.learning_rate, weight_decay=args.weight_decay)
-        scheduler = transformers.get_linear_schedule_with_warmup(optimizer=optimizer,
-                                                                 num_warmup_steps=self._get_warmup_steps(max_steps),
-                                                                 num_training_steps=max_steps)
+        
+        # Select scheduler based on args.lr_scheduler_type
+        num_warmup_steps = self._get_warmup_steps(max_steps)
+        if hasattr(args, 'lr_scheduler_type') and args.lr_scheduler_type == 'cosine':
+            scheduler = transformers.get_cosine_schedule_with_warmup(
+                optimizer=optimizer,
+                num_warmup_steps=num_warmup_steps,
+                num_training_steps=max_steps
+            )
+        else:
+            scheduler = transformers.get_linear_schedule_with_warmup(
+                optimizer=optimizer,
+                num_warmup_steps=num_warmup_steps,
+                num_training_steps=max_steps
+            )
         loss_calculator = self._create_loss()
 
         best_valid_loss = float('inf')
@@ -262,7 +274,7 @@ class Trainer(BaseTrainer):
     def _eval(self, model, dataset, loss_calculator, metrics: List[str], save_result: bool = False):
         model.eval()
         
-        # Sample 10% of dataset for faster eval during training
+        # Sample 1% of dataset for faster eval during training
         original_samples = None
         if not save_result:  # Only sample during training eval, not final eval
             import random
@@ -274,6 +286,11 @@ class Trainer(BaseTrainer):
             dataset._samples = {k: v for k, v in original_samples.items() 
                                 if v.impression.impression_id in sampled_impression_ids}
             self._logger.info(f'Eval on {len(sampled_impression_ids)} impressions ({len(dataset.samples)} samples, ~1% of data)')
+        
+        # Pre-encode all news for faster evaluation
+        self._logger.info('Pre-encoding all unique news for evaluation...')
+        news_embeddings_cache = self._encode_all_news(model, dataset)
+        self._logger.info(f'Cached {len(news_embeddings_cache)} news embeddings')
         
         dataset.set_mode(Dataset.EVAL_MODE)
         if self.args.fast_eval:
@@ -292,9 +309,9 @@ class Trainer(BaseTrainer):
                 # Use FP16 for evaluation if enabled
                 if self.args.fp16:
                     with torch.cuda.amp.autocast():
-                        poly_attn, logits = self._forward_step(model, batch)
+                        poly_attn, logits = self._forward_step_with_cache(model, batch, news_embeddings_cache)
                 else:
-                    poly_attn, logits = self._forward_step(model, batch)
+                    poly_attn, logits = self._forward_step_with_cache(model, batch, news_embeddings_cache)
                 if 'loss' in self.args.evaluation_info:
                     batch_loss = loss_calculator.compute_eval_loss(poly_attn, logits, batch['label'])
                     total_loss += batch_loss
@@ -329,7 +346,10 @@ class Trainer(BaseTrainer):
         keys = batch[0].keys()
         for key in keys:
             samples = [s[key] for s in batch]
-            if not batch[0][key].shape:
+            if key in ['his_news_ids', 'candidate_news_ids']:
+                # Keep as list of lists for news IDs
+                padded_batch[key] = samples
+            elif not batch[0][key].shape:
                 padded_batch[key] = torch.stack(samples)
             else:
                 if key in ['his_title', 'title', 'his_sapo', 'sapo']:
@@ -350,6 +370,130 @@ class Trainer(BaseTrainer):
 
         return optimizer_params
 
+    def _encode_all_news(self, model, dataset):
+        """Pre-encode all unique news in the dataset and cache embeddings"""
+        unique_news = dataset.get_all_unique_news()
+        news_embeddings = {}
+        
+        # Batch encode for efficiency
+        batch_size = 256
+        num_batches = (len(unique_news) + batch_size - 1) // batch_size
+        
+        for i in tqdm(range(0, len(unique_news), batch_size), 
+                      total=num_batches, 
+                      desc='Encoding news embeddings'):
+            batch_news = unique_news[i:i + batch_size]
+            
+            # Prepare batch
+            titles = [news.title for news in batch_news]
+            sapos = [news.sapo for news in batch_news]
+            
+            titles = utils.padded_stack(titles, padding=self._tokenizer.pad_token_id).to(self._device)
+            sapos = utils.padded_stack(sapos, padding=self._tokenizer.pad_token_id).to(self._device)
+            title_masks = (titles != self._tokenizer.pad_token_id)
+            sapo_masks = (sapos != self._tokenizer.pad_token_id)
+            
+            # Encode
+            if self.args.fp16:
+                with torch.cuda.amp.autocast():
+                    embeddings = model.news_encoder(title_encoding=titles, title_attn_mask=title_masks,
+                                                   sapo_encoding=sapos, sapo_attn_mask=sapo_masks)
+            else:
+                embeddings = model.news_encoder(title_encoding=titles, title_attn_mask=title_masks,
+                                              sapo_encoding=sapos, sapo_attn_mask=sapo_masks)
+            
+            # Cache embeddings
+            for j, news in enumerate(batch_news):
+                news_embeddings[news.news_id] = embeddings[j]
+        
+        return news_embeddings
+    
+    def _forward_step_with_cache(self, model, batch, news_embeddings_cache):
+        """Forward step using pre-cached news embeddings"""
+        from src.utils import pairwise_cosine_similarity
+        
+        batch_size = batch['his_title'].shape[0]
+        num_candidates = batch['title'].shape[1]
+        his_length = batch['his_title'].shape[1]
+        
+        # Lookup cached embeddings for history news
+        # Shape: (batch_size, his_length, embed_dim)
+        history_repr_list = []
+        for idx, sample_his_ids in enumerate(batch['his_news_ids']):
+            sample_history = []
+            for i, news_id in enumerate(sample_his_ids):
+                if news_id in news_embeddings_cache:
+                    sample_history.append(news_embeddings_cache[news_id])
+                else:
+                    # Fallback: encode on-the-fly if not in cache
+                    title = batch['his_title'][idx][i].unsqueeze(0)
+                    sapo = batch['his_sapo'][idx][i].unsqueeze(0)
+                    title_mask = batch['his_title_mask'][idx][i].unsqueeze(0)
+                    sapo_mask = batch['his_sapo_mask'][idx][i].unsqueeze(0)
+                    
+                    if self.args.fp16:
+                        with torch.cuda.amp.autocast():
+                            embedding = model.news_encoder(title_encoding=title, title_attn_mask=title_mask,
+                                                          sapo_encoding=sapo, sapo_attn_mask=sapo_mask)
+                    else:
+                        embedding = model.news_encoder(title_encoding=title, title_attn_mask=title_mask,
+                                                      sapo_encoding=sapo, sapo_attn_mask=sapo_mask)
+                    sample_history.append(embedding.squeeze(0))
+                    # Cache for future use
+                    news_embeddings_cache[news_id] = embedding.squeeze(0)
+            history_repr_list.append(torch.stack(sample_history))
+        history_repr = torch.stack(history_repr_list)  # (batch_size, his_length, embed_dim)
+        
+        # Lookup cached embeddings for candidate news
+        # Shape: (batch_size, num_candidates, embed_dim)
+        candidate_repr_list = []
+        for idx, sample_cand_ids in enumerate(batch['candidate_news_ids']):
+            sample_candidates = []
+            for i, news_id in enumerate(sample_cand_ids):
+                if news_id in news_embeddings_cache:
+                    sample_candidates.append(news_embeddings_cache[news_id])
+                else:
+                    # Fallback: encode on-the-fly if not in cache
+                    title = batch['title'][idx][i].unsqueeze(0)
+                    sapo = batch['sapo'][idx][i].unsqueeze(0)
+                    title_mask = batch['title_mask'][idx][i].unsqueeze(0)
+                    sapo_mask = batch['sapo_mask'][idx][i].unsqueeze(0)
+                    
+                    if self.args.fp16:
+                        with torch.cuda.amp.autocast():
+                            embedding = model.news_encoder(title_encoding=title, title_attn_mask=title_mask,
+                                                          sapo_encoding=sapo, sapo_attn_mask=sapo_mask)
+                    else:
+                        embedding = model.news_encoder(title_encoding=title, title_attn_mask=title_mask,
+                                                      sapo_encoding=sapo, sapo_attn_mask=sapo_mask)
+                    sample_candidates.append(embedding.squeeze(0))
+                    # Cache for future use
+                    news_embeddings_cache[news_id] = embedding.squeeze(0)
+            candidate_repr_list.append(torch.stack(sample_candidates))
+        candidate_repr = torch.stack(candidate_repr_list)  # (batch_size, num_candidates, embed_dim)
+        
+        # Category bias and poly attention (SAME AS ORIGINAL)
+        if model.use_category_bias:
+            his_category_embed = model.category_embedding(batch['his_category'])
+            his_category_embed = model.category_dropout(his_category_embed)
+            candidate_category_embed = model.category_embedding(batch['category'])
+            candidate_category_embed = model.category_dropout(candidate_category_embed)
+            category_bias = pairwise_cosine_similarity(his_category_embed, candidate_category_embed)
+            multi_user_interest = model.poly_attn(embeddings=history_repr, attn_mask=batch['his_mask'], bias=category_bias)
+        else:
+            multi_user_interest = model.poly_attn(embeddings=history_repr, attn_mask=batch['his_mask'], bias=None)
+        
+        # Click predictor (SAME AS ORIGINAL)
+        matching_scores = torch.matmul(candidate_repr, multi_user_interest.permute(0, 2, 1))
+        if model.score_type == 'max':
+            matching_scores = matching_scores.max(dim=2)[0]
+        elif model.score_type == 'mean':
+            matching_scores = matching_scores.mean(dim=2)
+        elif model.score_type == 'weighted':
+            matching_scores = model.target_aware_attn(query=multi_user_interest, key=candidate_repr, value=matching_scores)
+        
+        return multi_user_interest, matching_scores
+    
     @staticmethod
     def _forward_step(model, batch):
         poly_attn, logits = model(title=batch['title'], title_mask=batch['title_mask'], his_title=batch['his_title'],

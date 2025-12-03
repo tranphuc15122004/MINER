@@ -104,6 +104,8 @@ def _add_train_args(parser: argparse.ArgumentParser):
                         help='Ratio of total training steps used for a linear warmup from 0 to learning_rate')
     parser.add_argument('--warmup_steps', type=int, default=None,
                         help='Number of steps used for a linear warmup from 0 to learning_rate (override warmup_ratio)')
+    parser.add_argument('--lr_scheduler_type', type=str, default='linear', choices=['linear', 'cosine'],
+                        help='Type of learning rate scheduler (linear or cosine)')
     parser.add_argument('--max_grad_norm', type=float, help='Max norms of the gradients')
     parser.add_argument('--weight_decay', type=float, help='Decoupled weight decay to apply')
     parser.add_argument('--logging_steps', type=int, help='Number of update steps between two logs')
