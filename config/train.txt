@@ -1,6 +1,7 @@
 # Common args
 --model_name Miner
---pretrained_tokenizer roberta-base
+#--pretrained_tokenizer roberta-base
+--pretrained_tokenizer distilroberta-base
 --user2id_path data/user2id.json
 --category2id_path data/category2id.json
 --max_title_length 20
@@ -17,7 +18,8 @@
 --eval_news_path data/valid/news.tsv
 
 # Model args
---pretrained_embedding roberta-base
+#--pretrained_embedding roberta-base
+--pretrained_embedding distilroberta-base
 --apply_reduce_dim
 #--use_sapo
 #--freeze_transformer

@@ -197,7 +197,7 @@ class BaseTrainer(ABC):
 
         logger_utils.log_csv(self._eval_csv, data)
 
-    def _save_model(self, model: nn.Module, optimizer, scheduler, flag: str):
+    def _save_model(self, model: nn.Module, optimizer, scheduler, flag: str, global_step: int = None, epoch: int = None):
         r"""
         Save the model
 
@@ -206,6 +206,8 @@ class BaseTrainer(ABC):
             optimizer:
             scheduler:
             flag:
+            global_step: Current global step (optional)
+            epoch: Current epoch (optional)
 
         Returns:
             None
@@ -214,6 +216,13 @@ class BaseTrainer(ABC):
         saved_point = {'model': model,
                        'optimizer': optimizer,
                        'scheduler': scheduler.state_dict()}
+        
+        # Add step and epoch info if provided
+        if global_step is not None:
+            saved_point['global_step'] = global_step
+        if epoch is not None:
+            saved_point['epoch'] = epoch
+            
         torch.save(saved_point, save_path)
 
     def _load_model(self, model_path: str):

@@ -130,10 +130,21 @@ class Trainer(BaseTrainer):
             self._logger.info(f'Loading checkpoint from {args.resume_from_checkpoint}')
             checkpoint = torch.load(args.resume_from_checkpoint, map_location=self._device)
             model.load_state_dict(checkpoint['model'].state_dict())
-            # KHÔNG load optimizer và scheduler - tạo mới để train tiếp với learning rate mới
-            # optimizer.load_state_dict(checkpoint['optimizer'].state_dict())
-            # scheduler.load_state_dict(checkpoint['scheduler'])
-            self._logger.info('Checkpoint loaded successfully (weights only, optimizer & scheduler reset)')
+            
+            # Check if we want to resume from exact step (load optimizer & scheduler)
+            if hasattr(args, 'resume_training') and args.resume_training:
+                # Resume training from checkpoint - load optimizer, scheduler, and step
+                optimizer.load_state_dict(checkpoint['optimizer'].state_dict())
+                scheduler.load_state_dict(checkpoint['scheduler'])
+                if 'global_step' in checkpoint:
+                    global_step = checkpoint['global_step']
+                    global_iteration = global_step * args.gradient_accumulation_steps
+                if 'epoch' in checkpoint:
+                    start_epoch = checkpoint['epoch']
+                self._logger.info(f'Resumed training from step {global_step}, epoch {start_epoch}')
+            else:
+                # Fine-tune mode - only load weights, reset optimizer & scheduler
+                self._logger.info('Checkpoint loaded successfully (weights only, optimizer & scheduler reset)')
 
         for epoch in range(start_epoch, args.num_train_epochs):
             epoch_start_time = time.time()
@@ -182,7 +193,8 @@ class Trainer(BaseTrainer):
                     # Save checkpoint periodically
                     if args.save_steps is not None and global_step % args.save_steps == 0:
                         self._logger.info(f'Saving checkpoint at step {global_step}')
-                        self._save_model(model, optimizer, scheduler, flag=f'checkpoint-{global_step}')
+                        self._save_model(model, optimizer, scheduler, flag=f'checkpoint-{global_step}', 
+                                       global_step=global_step, epoch=epoch)
 
                     if global_step % args.eval_steps == 0:
                         eval_start_time = time.time()
@@ -193,12 +205,14 @@ class Trainer(BaseTrainer):
                             self._logger.info(f'Best loss updates from {best_valid_loss} to {valid_loss}, '
                                               f'at global step {global_step}')
                             best_valid_loss = valid_loss
-                            self._save_model(model, optimizer, scheduler, flag='bestLossModel')
+                            self._save_model(model, optimizer, scheduler, flag='bestLossModel',
+                                           global_step=global_step, epoch=epoch)
                         if 'metrics' in self.args.evaluation_info and scores['auc'] > best_auc_score:
                             self._logger.info(f'Best AUC score updates from {best_auc_score} to {scores["auc"]}, '
                                               f'at global step {global_step}')
                             best_auc_score = scores['auc']
-                            self._save_model(model, optimizer, scheduler, flag='bestAucModel')
+                            self._save_model(model, optimizer, scheduler, flag='bestAucModel',
+                                           global_step=global_step, epoch=epoch)
                         eval_time += time.time() - eval_start_time
                 global_iteration += 1
 
@@ -210,11 +224,13 @@ class Trainer(BaseTrainer):
             if 'loss' in self.args.evaluation_info and valid_loss < best_valid_loss:
                 self._logger.info(f'Best loss updates from {best_valid_loss} to {valid_loss}, at epoch {epoch}')
                 best_valid_loss = valid_loss
-                self._save_model(model, optimizer, scheduler, flag='bestLossModel')
+                self._save_model(model, optimizer, scheduler, flag='bestLossModel',
+                               global_step=global_step, epoch=epoch)
             if 'metrics' in self.args.evaluation_info and scores['auc'] > best_auc_score:
                 self._logger.info(f'Best AUC score updates from {best_auc_score} to {scores["auc"]}, at epoch {epoch}')
                 best_auc_score = scores['auc']
-                self._save_model(model, optimizer, scheduler, flag='bestAucModel')
+                self._save_model(model, optimizer, scheduler, flag='bestAucModel',
+                               global_step=global_step, epoch=epoch)
             eval_time += time.time() - eval_start_time
 
             # Log running time
@@ -224,7 +240,8 @@ class Trainer(BaseTrainer):
                               f'{round(epoch_end_time - epoch_start_time - eval_time, ndigits=4)} (s)')
 
         # Save final model
-        self._save_model(model, optimizer, scheduler, flag='finalModel')
+        self._save_model(model, optimizer, scheduler, flag='finalModel',
+                       global_step=global_step, epoch=num_train_epochs-1)
         self._logger.info('---  Finish training!!!  ---')
 
     def eval(self):

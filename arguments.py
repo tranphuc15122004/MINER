@@ -82,6 +82,9 @@ def _add_train_args(parser: argparse.ArgumentParser):
                         help='Path of the directory where to save the log files to be parsed by TensorBoard')
     parser.add_argument('--resume_from_checkpoint', type=str, default=None,
                         help='Path to checkpoint to resume training from')
+    parser.add_argument('--resume_training', action='store_true',
+                        help='If True, resume training from checkpoint (restore step, epoch, optimizer, scheduler). '
+                             'If False, only load model weights for fine-tuning')
     parser.add_argument('--npratio', type=int, default=4, help='Number of negative samples per positive sample')
     parser.add_argument('--train_batch_size', type=int, help='How many samples per batch to load in the training phase')
     parser.add_argument('--eval_batch_size', type=int,
