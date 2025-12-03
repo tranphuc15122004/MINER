@@ -7,12 +7,9 @@
 --max_sapo_length 64
 --his_length 50
 --seed 36
+--save_eval_result
 --metrics auc mrr ndcg@5 ndcg@10
-
-# Data args
---data_name MIND
---eval_behaviors_path data/valid/behaviors.tsv
---eval_news_path data/valid/news.tsv
+--evaluation_info metrics
 
 # Model args
 --pretrained_embedding roberta-base
@@ -28,9 +25,12 @@
 --dropout 0.2
 
 # Eval args
---eval_batch_size 256
---saved_model_path checkpoint/no_sapo/bestAucModel.pt
---dataloader_num_workers 4
+--data_name MIND
+--eval_behaviors_path data/valid/behaviors.tsv
+--eval_news_path data/valid/news.tsv
+--saved_model_path checkpoint/no_sapo/finalModel.pt
+--eval_batch_size 512
+--fp16
+--dataloader_num_workers 8
 --dataloader_pin_memory
---save_eval_result
---evaluation_info loss metrics
+--fast_eval

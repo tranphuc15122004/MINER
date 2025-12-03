@@ -1,0 +1,31 @@
+{
+    "category2id_path": "data/category2id.json",
+    "category_embed_path": null,
+    "data_name": "MIND",
+    "dataloader_num_workers": 4,
+    "dataloader_pin_memory": true,
+    "eval_batch_size": 128,
+    "eval_behaviors_path": "data/valid/behaviors.tsv",
+    "eval_news_path": "data/valid/news.tsv",
+    "eval_path": "eval",
+    "evaluation_info": [
+        "metrics"
+    ],
+    "fast_eval": false,
+    "his_length": 50,
+    "max_sapo_length": 64,
+    "max_title_length": 20,
+    "metrics": [
+        "auc",
+        "mrr",
+        "ndcg@5",
+        "ndcg@10"
+    ],
+    "mode": "eval",
+    "model_name": "Miner",
+    "pretrained_tokenizer": "roberta-base",
+    "save_eval_result": true,
+    "saved_model_path": "checkpoint/no_sapo/finalModel.pt",
+    "seed": 36,
+    "user2id_path": "data/user2id.json"
+}
