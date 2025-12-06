@@ -129,7 +129,7 @@ class Trainer(BaseTrainer):
         if args.resume_from_checkpoint is not None:
             self._logger.info(f'Loading checkpoint from {args.resume_from_checkpoint}')
             checkpoint = torch.load(args.resume_from_checkpoint, map_location=self._device)
-            model.load_state_dict(checkpoint['model'].state_dict())
+            model.load_state_dict(checkpoint['model'].state_dict(), strict=False)
             
             # Check if we want to resume from exact step (load optimizer & scheduler)
             if hasattr(args, 'resume_training') and args.resume_training:
@@ -249,8 +249,25 @@ class Trainer(BaseTrainer):
         self._log_arguments()
 
         # Load model
-        model = self._load_model(args.saved_model_path)
+        # Load checkpoint and get model
+        checkpoint = self._load_model(args.saved_model_path)
+        
+        if 'is_old_format' in checkpoint:
+            # Old format - extract model from checkpoint dict
+            model = checkpoint['model']
+            if 'epoch' in checkpoint:
+                self._logger.info(f'Model was trained for {checkpoint.get("epoch", "unknown")} epochs')
+        else:
+            # New format - rebuild model and load state_dict
+            self._logger.info('Rebuilding model from checkpoint...')
+            category_embed = None
+            model = self._build_model(category_embed)
+            model.load_state_dict(checkpoint['model_state_dict'])
+            if 'epoch' in checkpoint:
+                self._logger.info(f'Model was trained for {checkpoint["epoch"]} epochs')
+        
         model.to(self._device)
+        model.eval()
 
         # Read eval dataset
         reader = Reader(tokenizer=self._tokenizer, max_title_length=args.max_title_length,
@@ -297,12 +314,12 @@ class Trainer(BaseTrainer):
             import random
             impression_ids = list(set([sample.impression.impression_id for sample in dataset.samples]))
             random.seed(42)  # Reproducible sampling
-            sampled_impression_ids = set(random.sample(impression_ids, k=max(1, len(impression_ids) // 100)))
+            sampled_impression_ids = set(random.sample(impression_ids, k=max(1, len(impression_ids) // 5)))
             # Temporarily replace _samples with filtered version
             original_samples = dataset._samples
             dataset._samples = {k: v for k, v in original_samples.items() 
                                 if v.impression.impression_id in sampled_impression_ids}
-            self._logger.info(f'Eval on {len(sampled_impression_ids)} impressions ({len(dataset.samples)} samples, ~1% of data)')
+            self._logger.info(f'Eval on {len(sampled_impression_ids)} impressions ({len(dataset.samples)} samples, ~20% of data)')
         
         # Pre-encode all news for faster evaluation
         self._logger.info('Pre-encoding all unique news for evaluation...')
@@ -559,3 +576,22 @@ class Trainer(BaseTrainer):
                                   his_sapo_mask=batch['his_sapo_mask'], category=batch['category'],
                                   his_category=batch['his_category'])
         return poly_attn, logits
+
+    
+    def _build_model(self, category_embed):
+        """Build model from args - needed for loading new format checkpoints"""
+        args = self.args
+        
+        config = RobertaConfig.from_pretrained(args.pretrained_embedding)
+        news_encoder = NewsEncoder.from_pretrained(args.pretrained_embedding, config=config,
+                                                   apply_reduce_dim=args.apply_reduce_dim, use_sapo=args.use_sapo,
+                                                   dropout=args.dropout, freeze_transformer=args.freeze_transformer,
+                                                   word_embed_dim=args.word_embed_dim, combine_type=args.combine_type,
+                                                   lstm_num_layers=args.lstm_num_layers, lstm_dropout=args.lstm_dropout)
+        model = Miner(news_encoder=news_encoder, use_category_bias=args.use_category_bias,
+                      num_context_codes=args.num_context_codes, context_code_dim=args.context_code_dim,
+                      score_type=args.score_type, dropout=args.dropout, num_category=len(self._category2id),
+                      category_embed_dim=args.category_embed_dim, category_pad_token_id=self._category2id['pad'],
+                      category_embed=category_embed)
+        
+        return model

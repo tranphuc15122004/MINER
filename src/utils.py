@@ -59,7 +59,11 @@ def to_device(batch: dict, device: object) -> dict:
     """
     converted_batch = dict()
     for key in batch.keys():
-        converted_batch[key] = batch[key].to(device)
+        # Only convert tensors, keep lists as-is (e.g., news_ids)
+        if isinstance(batch[key], torch.Tensor):
+            converted_batch[key] = batch[key].to(device)
+        else:
+            converted_batch[key] = batch[key]
 
     return converted_batch
 

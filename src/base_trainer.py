@@ -213,9 +213,14 @@ class BaseTrainer(ABC):
             None
         """
         save_path = os.path.join(self._path, flag + '.pt')
-        saved_point = {'model': model,
-                       'optimizer': optimizer,
-                       'scheduler': scheduler.state_dict()}
+        
+        # Save state_dict for better compatibility across transformers versions
+        saved_point = {
+            'model_state_dict': model.state_dict(),
+            'optimizer_state_dict': optimizer.state_dict() if optimizer is not None else None,
+            'scheduler_state_dict': scheduler.state_dict() if scheduler is not None else None,
+            'args': vars(self.args)  # Save all args for model reconstruction
+        }
         
         # Add step and epoch info if provided
         if global_step is not None:
@@ -224,20 +229,36 @@ class BaseTrainer(ABC):
             saved_point['epoch'] = epoch
             
         torch.save(saved_point, save_path)
+        self._logger.info(f'Model saved to {save_path}')
 
     def _load_model(self, model_path: str):
         r"""
-        Load the pre-trained model
+        Load the pre-trained model checkpoint
 
         Args:
             model_path:
 
         Returns:
-            A model
+            Checkpoint dictionary
         """
-        saved_point = torch.load(model_path, map_location=self._device)
-
-        return saved_point['model']
+        self._logger.info(f'Loading checkpoint from {model_path}')
+        
+        # Load checkpoint - compatible with both old and new PyTorch versions
+        try:
+            checkpoint = torch.load(model_path, map_location=self._device, weights_only=False)
+        except TypeError:
+            # PyTorch < 1.13 doesn't support weights_only parameter
+            checkpoint = torch.load(model_path, map_location=self._device)
+        
+        # Check if it's old format (full model) or new format (state_dict)
+        if 'model_state_dict' in checkpoint:
+            # New format
+            self._logger.info('Loading new format checkpoint (state_dict)')
+            return checkpoint
+        else:
+            # Old format - has 'model' key with full model object
+            self._logger.warning('Loading old format checkpoint (full model object)')
+            return {'model': checkpoint['model'], 'is_old_format': True}
 
     def _get_warmup_steps(self, num_training_steps: int):
         r"""

@@ -1,6 +1,5 @@
 # Common args
 --model_name Miner
-#--pretrained_tokenizer roberta-base
 --pretrained_tokenizer distilroberta-base
 --user2id_path data/user2id.json
 --category2id_path data/category2id.json
@@ -18,11 +17,8 @@
 --eval_news_path data/valid/news.tsv
 
 # Model args
-#--pretrained_embedding roberta-base
 --pretrained_embedding distilroberta-base
 --apply_reduce_dim
-#--use_sapo
-#--freeze_transformer
 --word_embed_dim 256
 --category_embed_dim 300
 --combine_type linear
@@ -35,7 +31,7 @@
 --npratio 4
 --train_batch_size 12
 --eval_batch_size 256
---resume_from_checkpoint checkpoint/no_sapo/bestAucModel.pt
+#--resume_from_checkpoint checkpoint/no_sapo/distilRoberta_3e.pt
 --dataloader_drop_last
 --dataloader_num_workers 4
 --dataloader_pin_memory
@@ -50,5 +46,5 @@
 --logging_steps 200
 --evaluation_info metrics
 --eval_steps 10000
---save_steps 461
+--save_steps 300
 --lr_scheduler_type cosine

@@ -88,7 +88,8 @@ class FastEvaluator(BaseEvaluator):
         Returns:
             None
         """
-        probs = torch_f.softmax(logits, dim=1)
+        # Use sigmoid instead of softmax for independent probability estimation
+        probs = torch.sigmoid(logits)
         self.prob_predictions.extend(probs.tolist())
 
 
@@ -145,7 +146,10 @@ def compute_mrr_score(y_true: np.ndarray, y_score: np.ndarray):
     y_true = np.take(y_true, rank)
     rr_score = y_true / (np.arange(len(y_true)) + 1)
 
-    return np.sum(rr_score) / np.sum(y_true)
+    sum_y_true = np.sum(y_true)
+    if sum_y_true == 0:
+        return 0.0
+    return np.sum(rr_score) / sum_y_true
 
 
 def compute_dcg_score(y_true: np.ndarray, y_score: np.ndarray, k: int):
@@ -184,6 +188,8 @@ def compute_ndcg_score(y_true: np.ndarray, y_score: np.ndarray, k: int):
     best = compute_dcg_score(y_true, y_true, k)
     actual = compute_dcg_score(y_true, y_score, k)
 
+    if best == 0:
+        return 0.0
     return actual / best
 
 
