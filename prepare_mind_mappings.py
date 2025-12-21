@@ -83,10 +83,16 @@ def create_category2id(news_paths, use_subcategory=False):
 def main():
     # Paths to MIND dataset files
     # Adjust these paths based on where you downloaded MIND dataset
-    train_behaviors = Path('data/train/behaviors.tsv')
+    """ train_behaviors = Path('data/train/behaviors.tsv')
     train_news = Path('data/train/news.tsv')
     valid_behaviors = Path('data/valid/behaviors.tsv')
-    valid_news = Path('data/valid/news.tsv')
+    valid_news = Path('data/valid/news.tsv') """
+    
+    train_behaviors = Path('data/MINDlarge_train/MINDlarge_train/behaviors.tsv')
+    train_news = Path('data/MINDlarge_train/MINDlarge_train/news.tsv')
+    valid_behaviors = Path('data/MINDlarge_test/MINDlarge_test/behaviors.tsv')
+    valid_news = Path('data/MINDlarge_test/MINDlarge_test/news.tsv')
+    
     
     # Check if files exist
     for file_path in [train_behaviors, train_news, valid_behaviors, valid_news]:

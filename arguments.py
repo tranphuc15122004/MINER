@@ -117,3 +117,25 @@ def _add_train_args(parser: argparse.ArgumentParser):
     parser.add_argument('--logging_steps', type=int, help='Number of update steps between two logs')
     parser.add_argument('--eval_steps', type=int, help='Number of update steps between two evaluations')
     parser.add_argument('--save_steps', type=int, default=None, help='Save checkpoint every X update steps')
+
+
+def add_submission_arguments(parser :  argparse.ArgumentParser):
+    _add_common_arguments(parser)
+    _add_model_args(parser)
+    parser.add_argument('--saved_model_path', type=str, help='Path to the trained model')
+    parser.add_argument('--data_name', type=str, help='Name of the eval dataset')
+    parser.add_argument('--eval_behaviors_path', type=str,
+                        help='Path to the behaviors.tsv file for the evaluation phase')
+    parser.add_argument('--eval_news_path', type=str, help='Path to the news.tsv file for the evaluation phase')
+    parser.add_argument('--fast_eval', action='store_true', help='Is there a fast evaluation for the eval dataset?')
+    parser.add_argument('--eval_batch_size', type=int, help='How many samples per batch to load in the test phase')
+    parser.add_argument('--fp16', action='store_true',
+                        help='Whether to use fp16 16-bit (mixed) precision training instead of 32-bit training')
+    parser.add_argument('--dataloader_num_workers', type=int, help='How many subprocesses to use for data loading')
+    parser.add_argument('--dataloader_pin_memory', action='store_true', help='If True, the data loader will copy '
+                                                                             'Tensors into device/CUDA pinned memory '
+                                                                             'before returning them.')
+    parser.add_argument('--eval_path', type=str, default='eval',
+                        help='Path to the directory where evaluation information is stored')
+    parser.add_argument('--use_full_dataset', action='store_true',
+                        help='Use full dataset for submission (default: sample 1%% for fast testing)')

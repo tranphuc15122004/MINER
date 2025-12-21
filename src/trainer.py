@@ -1,7 +1,10 @@
 import json
 import math
+import os
 import time
 from typing import List
+import random
+
 
 import torch
 from torch.cuda.amp import GradScaler
@@ -287,6 +290,139 @@ class Trainer(BaseTrainer):
             self._logger.info('Loss {}'.format(loss))
         for metric in args.metrics:
             self._logger.info(f'Metric {metric}: {scores[metric]}')
+    
+    def submission_generator(self , rank_mode: str):
+        args = self.args
+        self._log_arguments()
+
+        # Load model
+        checkpoint = self._load_model(args.saved_model_path)
+        
+        if 'is_old_format' in checkpoint:
+            model = checkpoint['model']
+            if 'epoch' in checkpoint:
+                self._logger.info(f'Model was trained for {checkpoint.get("epoch", "unknown")} epochs')
+        else:
+            self._logger.info('Rebuilding model from checkpoint...')
+            category_embed = None
+            model = self._build_model(category_embed)
+            model.load_state_dict(checkpoint['model_state_dict'])
+            if 'epoch' in checkpoint:
+                self._logger.info(f'Model was trained for {checkpoint["epoch"]} epochs')
+        
+        model.to(self._device)
+        model.eval()
+
+        # Read submission dataset (no labels)
+        reader = Reader(tokenizer=self._tokenizer, max_title_length=args.max_title_length,
+                        max_sapo_length=args.max_sapo_length, user2id=self._user2id, category2id=self._category2id,
+                        max_his_click=args.his_length, npratio=None)
+        dataset = reader.read_submission_dataset(args.data_name, args.eval_news_path, args.eval_behaviors_path)
+        self._logger.info(f'Model: {self.args.model_name}')
+        self._logger.info(f'Dataset: {self.args.data_name}')
+        self._logger.info(f'Test dataset: {len(dataset)} samples')
+
+        # Submission generation
+        self._logger.info('----------------  Generation phrase  ----------------')
+        
+        # Pre-encode all news for faster inference
+        self._logger.info('Pre-encoding all unique news...')
+        news_embeddings_cache = self._encode_all_news(model, dataset)
+        self._logger.info(f'Cached {len(news_embeddings_cache)} news embeddings')
+        
+        # Check if we should use full dataset or sample (default: sample 1%)
+        use_full_dataset = getattr(args, 'use_full_dataset', False)
+        
+        if not use_full_dataset:
+            # Test mode: Sample 1% impressions for quick testing
+            impression_ids = list(set([sample.impression.impression_id for sample in dataset.samples]))
+            random.seed(42)
+            sampled_impression_ids = set(random.sample(impression_ids, k=max(1, len(impression_ids) // 100)))
+            original_samples = dataset._samples
+            dataset._samples = {k: v for k, v in original_samples.items() 
+                                if v.impression.impression_id in sampled_impression_ids}
+            self._logger.info(f'Sampling mode: Using {len(sampled_impression_ids)} impressions ({len(dataset.samples)} samples, ~1% of data)')
+        else:
+            # Full dataset mode (for production submission)
+            self._logger.info(f'Full dataset mode: Using all {len(dataset.samples)} samples')
+            original_samples = None
+        
+        dataset.set_mode(Dataset.EVAL_MODE)
+        dataloader = DataLoader(dataset, batch_size=self.args.eval_batch_size, shuffle=False,
+                                num_workers=self.args.dataloader_num_workers, collate_fn=self._collate_fn,
+                                drop_last=False)
+        
+        # Collect predictions grouped by impression_id
+        impression_predictions = {}
+        
+        with torch.no_grad():
+            for batch in tqdm(dataloader, total=len(dataloader), desc='Generating predictions'):
+                if self.args.fp16:
+                    with torch.cuda.amp.autocast():
+                        _, logits = self._forward_step_with_cache(model, batch, news_embeddings_cache)
+                else:
+                    _, logits = self._forward_step_with_cache(model, batch, news_embeddings_cache)
+                
+                # Get scores (use sigmoid for independent probability estimation)
+                scores = torch.sigmoid(logits).cpu().numpy()
+                impression_ids = batch['impression_id'].cpu().numpy()
+                candidate_news_ids = batch['candidate_news_ids']
+                
+                # Group predictions by impression_id
+                for idx in range(len(impression_ids)):
+                    imp_id = int(impression_ids[idx])
+                    score = float(scores[idx][0])  # Single candidate per sample
+                    news_id = candidate_news_ids[idx][0]  # Single news per sample
+                    
+                    if imp_id not in impression_predictions:
+                        impression_predictions[imp_id] = []
+                    impression_predictions[imp_id].append((news_id, score))
+        
+        # Restore original samples if we sampled
+        if original_samples is not None:
+            dataset._samples = original_samples
+        
+        # Sort and generate submission file in MIND format
+        self._logger.info('Generating submission file...')
+        output_path = os.path.join(self._path, 'prediction_rank.txt')
+        
+        with open(output_path, 'w', encoding='utf-8') as f:
+            for imp_id in sorted(impression_predictions.keys()):
+                news_scores = impression_predictions[imp_id]
+                
+                # Rank mode: Output ranks (for CodaLab submission)
+                sorted_indices = sorted(range(len(news_scores)), 
+                                        key=lambda i: news_scores[i][1], 
+                                        reverse=True)
+                ranks = [0] * len(sorted_indices)
+                for rank, idx in enumerate(sorted_indices, start=1):
+                    ranks[idx] = rank
+                
+                # Format: impression_id [rank1,rank2,rank3,...]
+                output_str_rank = ','.join(map(str, ranks))
+            
+                f.write(f'{imp_id} [{output_str_rank}]\n')
+        
+        self._logger.info(f'Submission file saved to: {output_path}')
+        self._logger.info(f'Total impressions: {len(impression_predictions)}')
+        
+        
+        output_path = os.path.join(self._path, 'prediction_prod.txt')
+        
+        with open(output_path, 'w', encoding='utf-8') as f:
+            for imp_id in sorted(impression_predictions.keys()):
+                news_scores = impression_predictions[imp_id]
+                
+                # Prob mode: Output probabilities
+                # Format: impression_id [prob1,prob2,prob3,...]
+                probs = [score for _, score in news_scores]
+                output_str_prod = ','.join([f'{p:.6f}' for p in probs])
+            
+                f.write(f'{imp_id} [{output_str_prod}]\n')
+        
+        self._logger.info(f'Submission file saved to: {output_path}')
+        self._logger.info(f'Total impressions: {len(impression_predictions)}')
+                
 
     def _train_step(self, batch, model, loss_calculator, accumulation_factor: int):
         model.train()
@@ -311,15 +447,14 @@ class Trainer(BaseTrainer):
         # Sample 1% of dataset for faster eval during training
         original_samples = None
         if not save_result:  # Only sample during training eval, not final eval
-            import random
             impression_ids = list(set([sample.impression.impression_id for sample in dataset.samples]))
             random.seed(42)  # Reproducible sampling
-            sampled_impression_ids = set(random.sample(impression_ids, k=max(1, len(impression_ids) // 5)))
+            sampled_impression_ids = set(random.sample(impression_ids, k=max(1, len(impression_ids) // 2)))
             # Temporarily replace _samples with filtered version
             original_samples = dataset._samples
             dataset._samples = {k: v for k, v in original_samples.items() 
                                 if v.impression.impression_id in sampled_impression_ids}
-            self._logger.info(f'Eval on {len(sampled_impression_ids)} impressions ({len(dataset.samples)} samples, ~20% of data)')
+            self._logger.info(f'Eval on {len(sampled_impression_ids)} impressions ({len(dataset.samples)} samples, ~50% of data)')
         
         # Pre-encode all news for faster evaluation
         self._logger.info('Pre-encoding all unique news for evaluation...')
@@ -411,11 +546,15 @@ class Trainer(BaseTrainer):
         return optimizer_params
 
     def _encode_all_news(self, model, dataset):
-        """Pre-encode all unique news in the dataset and cache embeddings"""
+        """Pre-encode all unique news in the dataset and cache embeddings as tensor"""
         unique_news = dataset.get_all_unique_news()
-        news_embeddings = {}
+        max_news_id = max(news.news_id for news in unique_news)
         
-        # Batch encode for efficiency - smaller batch to avoid OOM
+        # Create tensor-based cache for O(1) indexing instead of dict lookup
+        embedding_dim = 256 if hasattr(self.args, 'word_embed_dim') else 768
+        news_embeddings_tensor = torch.zeros(max_news_id + 1, embedding_dim, dtype=torch.float32)
+        
+        # Batch encode for efficiency
         batch_size = self.args.eval_batch_size
         num_batches = (len(unique_news) + batch_size - 1) // batch_size
         
@@ -442,18 +581,18 @@ class Trainer(BaseTrainer):
                 embeddings = model.news_encoder(title_encoding=titles, title_attn_mask=title_masks,
                                               sapo_encoding=sapos, sapo_attn_mask=sapo_masks)
             
-            # Cache embeddings - MOVE TO CPU to save GPU memory
+            # Cache embeddings in tensor - stay on CPU to save GPU memory
             for j, news in enumerate(batch_news):
-                news_embeddings[news.news_id] = embeddings[j].detach().cpu()
+                news_embeddings_tensor[news.news_id] = embeddings[j].detach().cpu()
             
             # Clear GPU cache periodically
             if (i // batch_size) % 50 == 0:
                 torch.cuda.empty_cache()
         
-        return news_embeddings
+        return news_embeddings_tensor
     
     def _forward_step_with_cache(self, model, batch, news_embeddings_cache):
-        """Forward step using pre-cached news embeddings"""
+        """Forward step using pre-cached news embeddings - OPTIMIZED with tensor indexing"""
         from src.utils import pairwise_cosine_similarity
         
         batch_size = batch['his_title'].shape[0]
@@ -465,86 +604,18 @@ class Trainer(BaseTrainer):
         candidate_category = batch['category'].to(self._device)
         his_mask = batch['his_mask'].to(self._device)
         
-        # Batch lookup cached embeddings for history news
-        # Shape: (batch_size, his_length, embed_dim)
-        history_repr_list = []
-        for idx, sample_his_ids in enumerate(batch['his_news_ids']):
-            # Collect all embeddings for this sample first (stay on CPU)
-            sample_history_cpu = []
-            missing_indices = []
-            
-            for i, news_id in enumerate(sample_his_ids):
-                if news_id in news_embeddings_cache:
-                    sample_history_cpu.append(news_embeddings_cache[news_id])
-                else:
-                    missing_indices.append(i)
-                    sample_history_cpu.append(None)  # Placeholder
-            
-            # Encode missing news if any
-            if missing_indices:
-                print('         Encode a missing NEWS           ')
-                for i in missing_indices:
-                    title = batch['his_title'][idx][i].unsqueeze(0).to(self._device)
-                    sapo = batch['his_sapo'][idx][i].unsqueeze(0).to(self._device)
-                    title_mask = batch['his_title_mask'][idx][i].unsqueeze(0).to(self._device)
-                    sapo_mask = batch['his_sapo_mask'][idx][i].unsqueeze(0).to(self._device)
-                    
-                    if self.args.fp16:
-                        with torch.cuda.amp.autocast():
-                            embedding = model.news_encoder(title_encoding=title, title_attn_mask=title_mask,
-                                                          sapo_encoding=sapo, sapo_attn_mask=sapo_mask)
-                    else:
-                        embedding = model.news_encoder(title_encoding=title, title_attn_mask=title_mask,
-                                                      sapo_encoding=sapo, sapo_attn_mask=sapo_mask)
-                    news_id = sample_his_ids[i]
-                    sample_history_cpu[i] = embedding.squeeze(0).detach().cpu()
-                    news_embeddings_cache[news_id] = sample_history_cpu[i]
-            
-            # Batch transfer CPU→GPU: stack then move (much faster!)
-            sample_history_gpu = torch.stack(sample_history_cpu).to(self._device)
-            history_repr_list.append(sample_history_gpu)
+        # OPTIMIZED: Vectorized lookup using tensor indexing (no Python loops!)
+        # Convert news_ids to tensor indices
+        his_news_ids_tensor = torch.tensor([[news_id for news_id in sample] 
+                                            for sample in batch['his_news_ids']], dtype=torch.long)
+        cand_news_ids_tensor = torch.tensor([[news_id for news_id in sample] 
+                                             for sample in batch['candidate_news_ids']], dtype=torch.long)
         
-        history_repr = torch.stack(history_repr_list)  # (batch_size, his_length, embed_dim)
+        # Vectorized lookup: (batch_size, his_length, embed_dim) in ONE operation
+        history_repr = news_embeddings_cache[his_news_ids_tensor].to(self._device)
         
-        # Batch lookup cached embeddings for candidate news
-        # Shape: (batch_size, num_candidates, embed_dim)
-        candidate_repr_list = []
-        for idx, sample_cand_ids in enumerate(batch['candidate_news_ids']):
-            # Collect all embeddings for this sample first (stay on CPU)
-            sample_candidates_cpu = []
-            missing_indices = []
-            
-            for i, news_id in enumerate(sample_cand_ids):
-                if news_id in news_embeddings_cache:
-                    sample_candidates_cpu.append(news_embeddings_cache[news_id])
-                else:
-                    missing_indices.append(i)
-                    sample_candidates_cpu.append(None)  # Placeholder
-            
-            # Encode missing news if any
-            if missing_indices:
-                for i in missing_indices:
-                    title = batch['title'][idx][i].unsqueeze(0).to(self._device)
-                    sapo = batch['sapo'][idx][i].unsqueeze(0).to(self._device)
-                    title_mask = batch['title_mask'][idx][i].unsqueeze(0).to(self._device)
-                    sapo_mask = batch['sapo_mask'][idx][i].unsqueeze(0).to(self._device)
-                    
-                    if self.args.fp16:
-                        with torch.cuda.amp.autocast():
-                            embedding = model.news_encoder(title_encoding=title, title_attn_mask=title_mask,
-                                                          sapo_encoding=sapo, sapo_attn_mask=sapo_mask)
-                    else:
-                        embedding = model.news_encoder(title_encoding=title, title_attn_mask=title_mask,
-                                                      sapo_encoding=sapo, sapo_attn_mask=sapo_mask)
-                    news_id = sample_cand_ids[i]
-                    sample_candidates_cpu[i] = embedding.squeeze(0).detach().cpu()
-                    news_embeddings_cache[news_id] = sample_candidates_cpu[i]
-            
-            # Batch transfer CPU→GPU: stack then move (much faster!)
-            sample_candidates_gpu = torch.stack(sample_candidates_cpu).to(self._device)
-            candidate_repr_list.append(sample_candidates_gpu)
-        
-        candidate_repr = torch.stack(candidate_repr_list)  # (batch_size, num_candidates, embed_dim)
+        # Vectorized lookup: (batch_size, num_candidates, embed_dim) in ONE operation  
+        candidate_repr = news_embeddings_cache[cand_news_ids_tensor].to(self._device)
         
         # Category bias and poly attention (SAME AS ORIGINAL)
         if model.use_category_bias:

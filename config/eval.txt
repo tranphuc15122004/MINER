@@ -14,8 +14,6 @@
 # Model args
 --pretrained_embedding distilroberta-base
 --apply_reduce_dim
-#--use_sapo
-#--freeze_transformer
 --word_embed_dim 256
 --category_embed_dim 300
 --combine_type linear
@@ -28,9 +26,9 @@
 --data_name MIND
 --eval_behaviors_path data/valid/behaviors.tsv
 --eval_news_path data/valid/news.tsv
---saved_model_path checkpoint/no_sapo/distilRoberta_3e.pt
+--saved_model_path checkpoint/bestAucModel.pt
 --eval_batch_size 512
 --fp16
 --dataloader_num_workers 8
 --dataloader_pin_memory
---fast_eval
+# --fast_eval  

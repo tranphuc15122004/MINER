@@ -1,0 +1,34 @@
+# Common args
+--model_name Miner
+--pretrained_tokenizer distilroberta-base
+--user2id_path data/user2id.json
+--category2id_path data/category2id.json
+--max_title_length 20
+--max_sapo_length 64
+--his_length 50
+--seed 36
+#--save_eval_result
+--metrics auc mrr ndcg@5 ndcg@10
+--evaluation_info metrics
+
+# Model args
+--pretrained_embedding distilroberta-base
+--apply_reduce_dim
+--word_embed_dim 256
+--category_embed_dim 300
+--combine_type linear
+--num_context_codes 32
+--context_code_dim 200
+--score_type weighted
+--dropout 0.2
+
+# Eval args
+--data_name MIND
+--eval_behaviors_path data/MINDlarge_test/MINDlarge_test/behaviors.tsv
+--eval_news_path data/MINDlarge_test/MINDlarge_test/news.tsv
+--saved_model_path checkpoint/bestAucModel.pt
+--eval_batch_size 512
+--fp16
+--dataloader_num_workers 0
+#--dataloader_pin_memory
+--use_full_dataset

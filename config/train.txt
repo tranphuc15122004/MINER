@@ -11,8 +11,8 @@
 
 # Data args
 --data_name MIND
---train_behaviors_path data/train/behaviors.tsv
---train_news_path data/train/news.tsv
+--train_behaviors_path data/MINDlarge_train/MINDlarge_train/behaviors.tsv
+--train_news_path data/MINDlarge_train/MINDlarge_train/news.tsv
 --eval_behaviors_path data/valid/behaviors.tsv
 --eval_news_path data/valid/news.tsv
 
@@ -38,7 +38,7 @@
 --fp16
 --fast_eval
 --gradient_accumulation_steps 32
---num_train_epochs 5
+--num_train_epochs 3
 --learning_rate 5e-5
 --warmup_ratio 0.05
 --max_grad_norm 0.8

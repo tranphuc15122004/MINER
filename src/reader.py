@@ -23,8 +23,9 @@ class Reader:
         dataset, news_dataset = self._read(data_name, news_path)
         with open(behaviors_path, mode='r', encoding='utf-8', newline='') as f:
             behaviors_tsv = csv.reader(f, delimiter='\t')
-            for i, line in enumerate(behaviors_tsv):
-                self._parse_train_line(i, line, news_dataset, dataset)
+            for line in behaviors_tsv:
+                impression_id = int(line[constants.IMPRESSION_ID])
+                self._parse_train_line(impression_id, line, news_dataset, dataset)
 
         return dataset
 
@@ -32,8 +33,19 @@ class Reader:
         dataset, news_dataset = self._read(data_name, news_path)
         with open(behaviors_path, mode='r', encoding='utf-8', newline='') as f:
             behaviors_tsv = csv.reader(f, delimiter='\t')
-            for i, line in enumerate(behaviors_tsv):
-                self._parse_eval_line(i, line, news_dataset, dataset)
+            for line in behaviors_tsv:
+                impression_id = int(line[constants.IMPRESSION_ID])
+                self._parse_eval_line(impression_id, line, news_dataset, dataset)
+
+        return dataset
+
+    def read_submission_dataset(self, data_name: str, news_path: str, behaviors_path: str) -> Dataset:
+        dataset, news_dataset = self._read(data_name, news_path)
+        with open(behaviors_path, mode='r', encoding='utf-8', newline='') as f:
+            behaviors_tsv = csv.reader(f, delimiter='\t')
+            for line in behaviors_tsv:
+                impression_id = int(line[constants.IMPRESSION_ID])
+                self._parse_submission_line(impression_id, line, news_dataset, dataset)
 
         return dataset
 
@@ -85,12 +97,12 @@ class Reader:
             None
         """
         user_id = self._user2id.get(line[constants.USER_ID], self._user2id['unk'])
-        history_clicked = [news_dataset[news_id] for news_id in line[constants.HISTORY].split()]
+        history_clicked = [news_dataset.get(news_id, news_dataset['pad']) for news_id in line[constants.HISTORY].split()]
         history_clicked = [news_dataset['pad']] * (self._max_his_click - len(history_clicked)) + history_clicked[
                                                                                                  :self._max_his_click]
-        pos_news = [news_dataset[news_id] for news_id, label in
+        pos_news = [news_dataset.get(news_id, news_dataset['pad']) for news_id, label in
                     [behavior.split('-') for behavior in line[constants.BEHAVIOR].split()] if label == '1']
-        neg_news = [news_dataset[news_id] for news_id, label in
+        neg_news = [news_dataset.get(news_id, news_dataset['pad']) for news_id, label in
                     [behavior.split('-') for behavior in line[constants.BEHAVIOR].split()] if label == '0']
         for news in pos_news:
             label = [1] + [0] * self._npratio
@@ -115,12 +127,34 @@ class Reader:
             None
         """
         user_id = self._user2id.get(line[constants.USER_ID], self._user2id['unk'])
-        history_clicked = [news_dataset[news_id] for news_id in line[constants.HISTORY].split()]
+        history_clicked = [news_dataset.get(news_id, news_dataset['pad']) for news_id in line[constants.HISTORY].split()]
         history_clicked = [news_dataset['pad']] * (self._max_his_click - len(history_clicked)) + history_clicked[
                                                                                                  :self._max_his_click]
         for behavior in line[constants.BEHAVIOR].split():
             news_id, label = behavior.split('-')
-            impression = dataset.create_impression(impression_id, user_id, [news_dataset[news_id]], [int(label)])
+            impression = dataset.create_impression(impression_id, user_id, [news_dataset.get(news_id, news_dataset['pad'])], [int(label)])
+            dataset.add_sample(user_id, history_clicked, impression)
+
+    def _parse_submission_line(self, impression_id, line, news_dataset, dataset):
+        r"""
+        Parse a line of the submission dataset (no labels)
+
+        Args:
+            impression_id: ID of the impression.
+            line: information about the impression ``(ID - User ID - Time - History - Behavior)``.
+            news_dataset: a dictionary contains information about all the news ``(News ID - News object)``.
+            dataset: Dataset object.
+
+        Returns:
+            None
+        """
+        user_id = self._user2id.get(line[constants.USER_ID], self._user2id['unk'])
+        history_clicked = [news_dataset.get(news_id, news_dataset['pad']) for news_id in line[constants.HISTORY].split()]
+        history_clicked = [news_dataset['pad']] * (self._max_his_click - len(history_clicked)) + history_clicked[
+                                                                                                 :self._max_his_click]
+        for news_id in line[constants.BEHAVIOR].split():
+            # For submission, there are no labels, so we use a dummy label of 0
+            impression = dataset.create_impression(impression_id, user_id, [news_dataset.get(news_id, news_dataset['pad'])], [0])
             dataset.add_sample(user_id, history_clicked, impression)
 
 

@@ -1,4 +1,5 @@
 # Index of columns in behaviors.tsv
+IMPRESSION_ID = 0
 USER_ID = 1
 HISTORY = 3
 BEHAVIOR = 4
