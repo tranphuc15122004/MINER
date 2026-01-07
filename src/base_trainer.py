@@ -243,8 +243,7 @@ class BaseTrainer(ABC):
         """
         saved_point = torch.load(model_path, map_location=self._device)
 
-        return saved_point['model']
-
+        return saved_point
     def _get_warmup_steps(self, num_training_steps: int):
         r"""
         Get number of steps used for a linear warmup

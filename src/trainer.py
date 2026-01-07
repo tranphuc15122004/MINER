@@ -255,7 +255,18 @@ class Trainer(BaseTrainer):
         self._log_arguments()
 
         # Load model
-        model : nn.Module = self._load_model(args.saved_model_path)
+        checkpoint : nn.Module = self._load_model(args.saved_model_path)
+        if 'is_old_format' in checkpoint:
+            model = checkpoint['model']
+            if 'epoch' in checkpoint:
+                self._logger.info(f'Model was trained for {checkpoint.get("epoch", "unknown")} epochs')
+        else:
+            self._logger.info('Rebuilding model from checkpoint...')
+            category_embed = None
+            model = self._build_model(category_embed)
+            model.load_state_dict(checkpoint['model_state_dict'])
+            if 'epoch' in checkpoint:
+                self._logger.info(f'Model was trained for {checkpoint["epoch"]} epochs')
         model.to(self._device)
         model.eval()
 
@@ -278,7 +289,7 @@ class Trainer(BaseTrainer):
         for metric in args.metrics:
             self._logger.info(f'Metric {metric}: {scores[metric]}')
     
-    def submission_generator(self , rank_mode: str):
+    def submission_generator(self):
         args = self.args
         self._log_arguments()
 

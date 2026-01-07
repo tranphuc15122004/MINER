@@ -18,7 +18,7 @@ def _eval(args):
 
 def _submission(args):
     trainer = Trainer(args)
-    trainer.submission_generator('rank')
+    trainer.submission_generator()
 
 
 def main():
