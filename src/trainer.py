@@ -7,7 +7,10 @@ import random
 
 
 import torch
-from torch.cuda.amp import GradScaler
+try:
+    from torch.amp import GradScaler
+except ImportError:
+    from torch.cuda.amp import GradScaler
 import torch.nn as nn
 from torch.optim import AdamW
 from torch.utils.data import DataLoader
@@ -132,7 +135,7 @@ class Trainer(BaseTrainer):
         if args.resume_from_checkpoint is not None:
             self._logger.info(f'Loading checkpoint from {args.resume_from_checkpoint}')
             checkpoint = torch.load(args.resume_from_checkpoint, map_location=self._device)
-            model.load_state_dict(checkpoint['model'].state_dict(), strict=False)
+            model.load_state_dict(checkpoint['model'].state_dict())
             
             # Check if we want to resume from exact step (load optimizer & scheduler)
             if hasattr(args, 'resume_training') and args.resume_training:
@@ -252,23 +255,7 @@ class Trainer(BaseTrainer):
         self._log_arguments()
 
         # Load model
-        # Load checkpoint and get model
-        checkpoint = self._load_model(args.saved_model_path)
-        
-        if 'is_old_format' in checkpoint:
-            # Old format - extract model from checkpoint dict
-            model = checkpoint['model']
-            if 'epoch' in checkpoint:
-                self._logger.info(f'Model was trained for {checkpoint.get("epoch", "unknown")} epochs')
-        else:
-            # New format - rebuild model and load state_dict
-            self._logger.info('Rebuilding model from checkpoint...')
-            category_embed = None
-            model = self._build_model(category_embed)
-            model.load_state_dict(checkpoint['model_state_dict'])
-            if 'epoch' in checkpoint:
-                self._logger.info(f'Model was trained for {checkpoint["epoch"]} epochs')
-        
+        model : nn.Module = self._load_model(args.saved_model_path)
         model.to(self._device)
         model.eval()
 
@@ -441,7 +428,7 @@ class Trainer(BaseTrainer):
 
         return (loss * accumulation_factor).item()
 
-    def _eval(self, model, dataset, loss_calculator, metrics: List[str], save_result: bool = False):
+    def _eval(self, model : nn.Module, dataset : Dataset, loss_calculator : Loss, metrics: List[str], save_result: bool = False):
         model.eval()
         
         # Sample 1% of dataset for faster eval during training
@@ -574,9 +561,14 @@ class Trainer(BaseTrainer):
             
             # Encode
             if self.args.fp16:
-                with torch.cuda.amp.autocast():
-                    embeddings = model.news_encoder(title_encoding=titles, title_attn_mask=title_masks,
-                                                   sapo_encoding=sapos, sapo_attn_mask=sapo_masks)
+                try:
+                    with torch.amp.autocast('cuda'):
+                        embeddings = model.news_encoder(title_encoding=titles, title_attn_mask=title_masks,
+                                                       sapo_encoding=sapos, sapo_attn_mask=sapo_masks)
+                except AttributeError:
+                    with torch.cuda.amp.autocast():
+                        embeddings = model.news_encoder(title_encoding=titles, title_attn_mask=title_masks,
+                                                       sapo_encoding=sapos, sapo_attn_mask=sapo_masks)
             else:
                 embeddings = model.news_encoder(title_encoding=titles, title_attn_mask=title_masks,
                                               sapo_encoding=sapos, sapo_attn_mask=sapo_masks)
@@ -604,18 +596,86 @@ class Trainer(BaseTrainer):
         candidate_category = batch['category'].to(self._device)
         his_mask = batch['his_mask'].to(self._device)
         
-        # OPTIMIZED: Vectorized lookup using tensor indexing (no Python loops!)
-        # Convert news_ids to tensor indices
-        his_news_ids_tensor = torch.tensor([[news_id for news_id in sample] 
-                                            for sample in batch['his_news_ids']], dtype=torch.long)
-        cand_news_ids_tensor = torch.tensor([[news_id for news_id in sample] 
-                                             for sample in batch['candidate_news_ids']], dtype=torch.long)
+        # Batch lookup cached embeddings for history news
+        # Shape: (batch_size, his_length, embed_dim)
+        history_repr_list = []
+        for idx, sample_his_ids in enumerate(batch['his_news_ids']):
+            # Collect all embeddings for this sample first (stay on CPU)
+            sample_history_cpu = []
+            missing_indices = []
+            
+            for i, news_id in enumerate(sample_his_ids):
+                if news_id in news_embeddings_cache:
+                    sample_history_cpu.append(news_embeddings_cache[news_id])
+                else:
+                    missing_indices.append(i)
+                    sample_history_cpu.append(None)  # Placeholder
+            
+            # Encode missing news if any
+            if missing_indices:
+                print('         Encode a missing NEWS           ')
+                for i in missing_indices:
+                    title = batch['his_title'][idx][i].unsqueeze(0).to(self._device)
+                    sapo = batch['his_sapo'][idx][i].unsqueeze(0).to(self._device)
+                    title_mask = batch['his_title_mask'][idx][i].unsqueeze(0).to(self._device)
+                    sapo_mask = batch['his_sapo_mask'][idx][i].unsqueeze(0).to(self._device)
+                    
+                    if self.args.fp16:
+                        with torch.cuda.amp.autocast():
+                            embedding = model.news_encoder(title_encoding=title, title_attn_mask=title_mask,
+                                                          sapo_encoding=sapo, sapo_attn_mask=sapo_mask)
+                    else:
+                        embedding = model.news_encoder(title_encoding=title, title_attn_mask=title_mask,
+                                                      sapo_encoding=sapo, sapo_attn_mask=sapo_mask)
+                    news_id = sample_his_ids[i]
+                    sample_history_cpu[i] = embedding.squeeze(0).detach().cpu()
+                    news_embeddings_cache[news_id] = sample_history_cpu[i]
+            
+            # Batch transfer CPU→GPU: stack then move (much faster!)
+            sample_history_gpu = torch.stack(sample_history_cpu).to(self._device)
+            history_repr_list.append(sample_history_gpu)
         
-        # Vectorized lookup: (batch_size, his_length, embed_dim) in ONE operation
-        history_repr = news_embeddings_cache[his_news_ids_tensor].to(self._device)
+        history_repr = torch.stack(history_repr_list)  # (batch_size, his_length, embed_dim)
         
-        # Vectorized lookup: (batch_size, num_candidates, embed_dim) in ONE operation  
-        candidate_repr = news_embeddings_cache[cand_news_ids_tensor].to(self._device)
+        # Batch lookup cached embeddings for candidate news
+        # Shape: (batch_size, num_candidates, embed_dim)
+        candidate_repr_list = []
+        for idx, sample_cand_ids in enumerate(batch['candidate_news_ids']):
+            # Collect all embeddings for this sample first (stay on CPU)
+            sample_candidates_cpu = []
+            missing_indices = []
+            
+            for i, news_id in enumerate(sample_cand_ids):
+                if news_id in news_embeddings_cache:
+                    sample_candidates_cpu.append(news_embeddings_cache[news_id])
+                else:
+                    missing_indices.append(i)
+                    sample_candidates_cpu.append(None)  # Placeholder
+            
+            # Encode missing news if any
+            if missing_indices:
+                for i in missing_indices:
+                    title = batch['title'][idx][i].unsqueeze(0).to(self._device)
+                    sapo = batch['sapo'][idx][i].unsqueeze(0).to(self._device)
+                    title_mask = batch['title_mask'][idx][i].unsqueeze(0).to(self._device)
+                    sapo_mask = batch['sapo_mask'][idx][i].unsqueeze(0).to(self._device)
+                    
+                    if self.args.fp16:
+                        with torch.cuda.amp.autocast():
+                            embedding = model.news_encoder(title_encoding=title, title_attn_mask=title_mask,
+                                                          sapo_encoding=sapo, sapo_attn_mask=sapo_mask)
+                    else:
+                        embedding = model.news_encoder(title_encoding=title, title_attn_mask=title_mask,
+                                                      sapo_encoding=sapo, sapo_attn_mask=sapo_mask)
+                    news_id = sample_cand_ids[i]
+                    sample_candidates_cpu[i] = embedding.squeeze(0).detach().cpu()
+                    news_embeddings_cache[news_id] = sample_candidates_cpu[i]
+            
+            # Batch transfer CPU→GPU: stack then move (much faster!)
+            sample_candidates_gpu = torch.stack(sample_candidates_cpu).to(self._device)
+            candidate_repr_list.append(sample_candidates_gpu)
+        
+        candidate_repr = torch.stack(candidate_repr_list)  # (batch_size, num_candidates, embed_dim)
         
         # Category bias and poly attention (SAME AS ORIGINAL)
         if model.use_category_bias:

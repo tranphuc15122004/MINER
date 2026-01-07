@@ -83,7 +83,7 @@ class Reader:
 
         return news_dataset
 
-    def _parse_train_line(self, impression_id, line, news_dataset, dataset):
+    def _parse_train_line(self, impression_id, line, news_dataset, dataset : Dataset):
         r"""
         Parse a line of the training dataset
 

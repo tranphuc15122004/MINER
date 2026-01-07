@@ -26,7 +26,7 @@
 --data_name MIND
 --eval_behaviors_path data/valid/behaviors.tsv
 --eval_news_path data/valid/news.tsv
---saved_model_path checkpoint/bestAucModel.pt
+--saved_model_path checkpoint/no_sapo/finalModel.pt
 --eval_batch_size 512
 --fp16
 --dataloader_num_workers 8

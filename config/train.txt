@@ -31,7 +31,7 @@
 --npratio 4
 --train_batch_size 12
 --eval_batch_size 256
-#--resume_from_checkpoint checkpoint/no_sapo/distilRoberta_3e.pt
+--resume_from_checkpoint checkpoint/no_sapo/bestAucModel.pt
 --dataloader_drop_last
 --dataloader_num_workers 4
 --dataloader_pin_memory

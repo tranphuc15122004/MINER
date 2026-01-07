@@ -1,0 +1,105 @@
+{
+  "method": "StackingLightGBM",
+  "n_folds": 8,
+  "sampling_rate": 10,
+  "oof_auc": 0.6772299057618713,
+  "lgb_params": {
+    "objective": "lambdarank",
+    "metric": "ndcg",
+    "ndcg_at": [
+      5,
+      10
+    ],
+    "learning_rate": 0.1,
+    "feature_fraction": 0.8,
+    "bagging_fraction": 0.8,
+    "bagging_freq": 1,
+    "max_bin": 1024,
+    "verbose": -1,
+    "seed": 42
+  },
+  "fold_metrics": [
+    {
+      "fold": 1,
+      "best_iteration": 14,
+      "best_score": {
+        "valid_0": {
+          "ndcg@5": 0.3629972244758595,
+          "ndcg@10": 0.42128737962032153
+        }
+      }
+    },
+    {
+      "fold": 2,
+      "best_iteration": 1,
+      "best_score": {
+        "valid_0": {
+          "ndcg@5": 0.3619751618465632,
+          "ndcg@10": 0.4316671669353364
+        }
+      }
+    },
+    {
+      "fold": 3,
+      "best_iteration": 14,
+      "best_score": {
+        "valid_0": {
+          "ndcg@5": 0.3530081895325596,
+          "ndcg@10": 0.41686014739811256
+        }
+      }
+    },
+    {
+      "fold": 4,
+      "best_iteration": 1,
+      "best_score": {
+        "valid_0": {
+          "ndcg@5": 0.36218106774341935,
+          "ndcg@10": 0.4153356003314753
+        }
+      }
+    },
+    {
+      "fold": 5,
+      "best_iteration": 34,
+      "best_score": {
+        "valid_0": {
+          "ndcg@5": 0.34094504069144205,
+          "ndcg@10": 0.4096134650415554
+        }
+      }
+    },
+    {
+      "fold": 6,
+      "best_iteration": 1,
+      "best_score": {
+        "valid_0": {
+          "ndcg@5": 0.3472594337756084,
+          "ndcg@10": 0.41557802075052647
+        }
+      }
+    },
+    {
+      "fold": 7,
+      "best_iteration": 92,
+      "best_score": {
+        "valid_0": {
+          "ndcg@5": 0.35043964419067825,
+          "ndcg@10": 0.41479871004447083
+        }
+      }
+    },
+    {
+      "fold": 8,
+      "best_iteration": 1,
+      "best_score": {
+        "valid_0": {
+          "ndcg@5": 0.35246681018372417,
+          "ndcg@10": 0.41746264508591197
+        }
+      }
+    }
+  ],
+  "num_features": 51,
+  "timestamp": "2026-01-07T00:44:31.662072"
+}

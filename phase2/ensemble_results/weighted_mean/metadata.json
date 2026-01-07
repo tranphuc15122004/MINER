@@ -1,0 +1,13 @@
+{
+  "method": "WeightedMean",
+  "n_trials": 1000,
+  "sampling_rate": 100,
+  "best_auc": 0.6883512735319521,
+  "best_weights": {
+    "pred_0": 0.6660348471549039,
+    "pred_1": 0.7954554471922213,
+    "pred_2": 0.834800805912357
+  },
+  "timestamp": "2026-01-07T00:43:45.444013",
+  "num_models": 3
+}
