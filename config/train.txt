@@ -48,3 +48,4 @@
 --eval_steps 10000
 --save_steps 300
 --lr_scheduler_type cosine
+--use_multi_gpu

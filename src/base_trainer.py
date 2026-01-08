@@ -214,9 +214,12 @@ class BaseTrainer(ABC):
         """
         save_path = os.path.join(self._path, flag + '.pt')
         
+        # Handle DataParallel wrapper - extract the underlying model
+        model_to_save = model.module if isinstance(model, nn.DataParallel) else model
+        
         # Save state_dict for better compatibility across transformers versions
         saved_point = {
-            'model_state_dict': model.state_dict(),
+            'model_state_dict': model_to_save.state_dict(),
             'optimizer_state_dict': optimizer.state_dict() if optimizer is not None else None,
             'scheduler_state_dict': scheduler.state_dict() if scheduler is not None else None,
             'args': vars(self.args)  # Save all args for model reconstruction

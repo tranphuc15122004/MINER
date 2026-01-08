@@ -24,6 +24,7 @@ def add_eval_arguments(parser: argparse.ArgumentParser):
     parser.add_argument('--dataloader_pin_memory', action='store_true', help='If True, the data loader will copy '
                                                                              'Tensors into device/CUDA pinned memory '
                                                                              'before returning them.')
+    parser.add_argument('--use_multi_gpu', action='store_true', help='Use DataParallel for multi-GPU evaluation')
     parser.add_argument('--eval_path', type=str, default='eval',
                         help='Path to the directory where evaluation information is stored')
 
@@ -96,6 +97,7 @@ def _add_train_args(parser: argparse.ArgumentParser):
     parser.add_argument('--dataloader_pin_memory', action='store_true', help='If True, the data loader will copy '
                                                                              'Tensors into device/CUDA pinned memory '
                                                                              'before returning them.')
+    parser.add_argument('--use_multi_gpu', action='store_true', help='Use DataParallel for multi-GPU training')
     parser.add_argument('--max_steps', type=int, default=None,
                         help='If set to a positive number, the total number of training steps to perform '
                              '(Overrides num_train_epochs)')
@@ -135,6 +137,7 @@ def add_submission_arguments(parser :  argparse.ArgumentParser):
     parser.add_argument('--dataloader_pin_memory', action='store_true', help='If True, the data loader will copy '
                                                                              'Tensors into device/CUDA pinned memory '
                                                                              'before returning them.')
+    parser.add_argument('--use_multi_gpu', action='store_true', help='Use DataParallel for multi-GPU submission')
     parser.add_argument('--eval_path', type=str, default='eval',
                         help='Path to the directory where evaluation information is stored')
     parser.add_argument('--use_full_dataset', action='store_true',

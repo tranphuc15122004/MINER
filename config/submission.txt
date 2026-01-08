@@ -31,3 +31,4 @@
 --fp16
 --dataloader_num_workers 10
 --dataloader_pin_memory
+--use_multi_gpu

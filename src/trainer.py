@@ -102,6 +102,15 @@ class Trainer(BaseTrainer):
                       category_embed_dim=args.category_embed_dim, category_pad_token_id=self._category2id['pad'],
                       category_embed=category_embed)
         model.to(self._device)
+        
+        # Enable multi-GPU training if requested
+        if hasattr(args, 'use_multi_gpu') and args.use_multi_gpu and torch.cuda.device_count() > 1:
+            self._logger.info(f'Using {torch.cuda.device_count()} GPUs with DataParallel')
+            model = nn.DataParallel(model)
+            self._is_multi_gpu = True
+        else:
+            self._is_multi_gpu = False
+            
         model.zero_grad(set_to_none=True)
 
         # Create optimizer and scheduler
@@ -264,10 +273,17 @@ class Trainer(BaseTrainer):
             self._logger.info('Rebuilding model from checkpoint...')
             category_embed = None
             model = self._build_model(category_embed)
-            model.load_state_dict(checkpoint['model_state_dict'])
+            # Load with strict=False to ignore non-parameter buffers like position_ids
+            model.load_state_dict(checkpoint['model_state_dict'], strict=False)
             if 'epoch' in checkpoint:
                 self._logger.info(f'Model was trained for {checkpoint["epoch"]} epochs')
         model.to(self._device)
+        
+        # Enable multi-GPU evaluation if requested
+        if hasattr(args, 'use_multi_gpu') and args.use_multi_gpu and torch.cuda.device_count() > 1:
+            self._logger.info(f'Using {torch.cuda.device_count()} GPUs for evaluation with DataParallel')
+            model = nn.DataParallel(model)
+        
         model.eval()
 
         # Read eval dataset
@@ -303,10 +319,17 @@ class Trainer(BaseTrainer):
             self._logger.info('Rebuilding model from checkpoint...')
             category_embed = None
             model = self._build_model(category_embed)
-            model.load_state_dict(checkpoint['model_state_dict'])
+            # Load with strict=False to ignore non-parameter buffers like position_ids
+            model.load_state_dict(checkpoint['model_state_dict'], strict=False)
             if 'epoch' in checkpoint:
                 self._logger.info(f'Model was trained for {checkpoint["epoch"]} epochs')
         model.to(self._device)
+        
+        # Enable multi-GPU evaluation if requested
+        if hasattr(args, 'use_multi_gpu') and args.use_multi_gpu and torch.cuda.device_count() > 1:
+            self._logger.info(f'Using {torch.cuda.device_count()} GPUs for submission generation with DataParallel')
+            model = nn.DataParallel(model)
+        
         model.eval()
 
         # Read eval dataset
