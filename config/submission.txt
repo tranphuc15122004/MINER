@@ -29,6 +29,5 @@
 --saved_model_path checkpoint/bestAucModel.pt
 --eval_batch_size 512
 --fp16
---dataloader_num_workers 0
-#--dataloader_pin_memory
---use_full_dataset
+--dataloader_num_workers 10
+--dataloader_pin_memory

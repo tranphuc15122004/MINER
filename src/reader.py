@@ -26,7 +26,8 @@ class Reader:
             for line in behaviors_tsv:
                 impression_id = int(line[constants.IMPRESSION_ID])
                 self._parse_train_line(impression_id, line, news_dataset, dataset)
-
+        
+        dataset.finalize()  # Build cache once after all samples added
         return dataset
 
     def read_eval_dataset(self, data_name: str, news_path: str, behaviors_path: str) -> Dataset:
@@ -37,16 +38,19 @@ class Reader:
                 impression_id = int(line[constants.IMPRESSION_ID])
                 self._parse_eval_line(impression_id, line, news_dataset, dataset)
 
+        dataset.finalize()  # Build cache once after all samples added
         return dataset
 
     def read_submission_dataset(self, data_name: str, news_path: str, behaviors_path: str) -> Dataset:
         dataset, news_dataset = self._read(data_name, news_path)
+        
         with open(behaviors_path, mode='r', encoding='utf-8', newline='') as f:
             behaviors_tsv = csv.reader(f, delimiter='\t')
             for line in behaviors_tsv:
                 impression_id = int(line[constants.IMPRESSION_ID])
                 self._parse_submission_line(impression_id, line, news_dataset, dataset)
 
+        dataset.finalize()  # Build cache once after all samples added
         return dataset
 
     def _read(self, data_name: str, news_path: str) -> Tuple[Dataset, dict]:
@@ -152,9 +156,9 @@ class Reader:
         history_clicked = [news_dataset.get(news_id, news_dataset['pad']) for news_id in line[constants.HISTORY].split()]
         history_clicked = [news_dataset['pad']] * (self._max_his_click - len(history_clicked)) + history_clicked[
                                                                                                  :self._max_his_click]
-        for news_id in line[constants.BEHAVIOR].split():
+        for behavior in line[constants.BEHAVIOR].split():
             # For submission, there are no labels, so we use a dummy label of 0
-            impression = dataset.create_impression(impression_id, user_id, [news_dataset.get(news_id, news_dataset['pad'])], [0])
+            impression = dataset.create_impression(impression_id, user_id, [news_dataset.get(behavior, news_dataset['pad'])], [0])
             dataset.add_sample(user_id, history_clicked, impression)
 
 

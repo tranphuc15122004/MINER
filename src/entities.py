@@ -90,6 +90,7 @@ class Dataset(TorchDataset):
 
         self._news_id = 0
         self._id = 0
+        self._samples_list_cache = None  # Cache for fast indexing
 
     def set_mode(self, mode: str):
         self._mode = mode
@@ -110,10 +111,19 @@ class Dataset(TorchDataset):
         sample = Sample(self._id, user_id, clicked_news, impression)
         self._samples[self._id] = sample
         self._id += 1
+        # Don't invalidate cache during batch loading - will be built once when needed
+        # self._samples_list_cache = None
+
+    def finalize(self):
+        """Build the samples list cache after all samples are added"""
+        if self._samples_list_cache is None:
+            self._samples_list_cache = list(self._samples.values())
 
     @property
     def samples(self) -> List[Sample]:
-        return list(self._samples.values())
+        if self._samples_list_cache is None:
+            self._samples_list_cache = list(self._samples.values())
+        return self._samples_list_cache
 
     @property
     def news_count(self) -> int:
@@ -134,10 +144,13 @@ class Dataset(TorchDataset):
         return list(unique_news.values())
 
     def __len__(self):
-        return len(self.samples)
+        return len(self._samples)
 
     def __getitem__(self, i: int):
-        sample = self.samples[i]
+        # OPTIMIZED: Use cached samples list for O(1) indexing
+        if self._samples_list_cache is None:
+            self._samples_list_cache = list(self._samples.values())
+        sample = self._samples_list_cache[i]
 
         if self._mode == Dataset.TRAIN_MODE:
             return create_train_sample(sample, self._tokenizer, self._category2id)

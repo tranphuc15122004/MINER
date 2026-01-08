@@ -53,15 +53,15 @@ class BaseEvaluator(ABC):
                 list_score = [compute_mrr_score(np.array(target), np.array(prob_prediction))
                               for target, prob_prediction in zip(self.targets, self.prob_predictions)]
                 scores['mrr'] = np.mean(list_score)
-                if save_result:
-                    save_scores(os.path.join(path, 'mrr.txt'), list_score)
+                # Disabled: if save_result:
+                #     save_scores(os.path.join(path, 'mrr.txt'), list_score)
             elif metric.startswith('ndcg'):
                 k = int(metric.split('@')[1])
                 list_score = [compute_ndcg_score(y_true=np.array(target), y_score=np.array(prob_prediction), k=k)
                               for target, prob_prediction in zip(self.targets, self.prob_predictions)]
                 scores[f'ndcg@{k}'] = np.mean(list_score)
-                if save_result:
-                    save_scores(os.path.join(path, f'ndcg{k}.txt'), list_score)
+                # Disabled: if save_result:
+                #     save_scores(os.path.join(path, f'ndcg{k}.txt'), list_score)
 
         return scores
 
@@ -96,23 +96,22 @@ class FastEvaluator(BaseEvaluator):
 class SlowEvaluator(BaseEvaluator):
     def __init__(self, dataset: Dataset):
         super().__init__(dataset)
-        self.impression_ids = []
+        self.group_predictions = {}  # Use dict to group directly - O(1) instead of O(n)
 
     def _convert_targets(self):
         group_labels = {}
         for sample in self.dataset.samples:
             impression_id = sample.impression.impression_id
-            group_labels[impression_id] = group_labels.get(impression_id, []) + sample.impression.label
+            if impression_id not in group_labels:
+                group_labels[impression_id] = []
+            group_labels[impression_id].extend(sample.impression.label)  # extend instead of + for efficiency
 
         group_labels = sorted(group_labels.items())
         self.targets = [i[1] for i in group_labels]
 
     def _convert_pred(self):
-        group_predictions = {}
-        for prob_prediction, impression_id in zip(self.prob_predictions, self.impression_ids):
-            group_predictions[impression_id] = group_predictions.get(impression_id, []) + prob_prediction
-
-        group_predictions = sorted(group_predictions.items())
+        # Already grouped in eval_batch, just sort and extract
+        group_predictions = sorted(self.group_predictions.items())
         self.prob_predictions = [i[1] for i in group_predictions]
 
     def eval_batch(self, logits: Tensor, impression_ids: Tensor):
@@ -126,9 +125,14 @@ class SlowEvaluator(BaseEvaluator):
         Returns:
             None
         """
-        probs = torch.sigmoid(logits)
-        self.prob_predictions.extend(probs.tolist())
-        self.impression_ids.extend(impression_ids.tolist())
+        probs = torch.sigmoid(logits).cpu()  # Move to CPU once for entire batch
+        
+        # Group predictions directly during eval_batch to avoid O(n²) complexity
+        for prob, imp_id in zip(probs.tolist(), impression_ids.tolist()):
+            imp_id_scalar = imp_id[0] if isinstance(imp_id, list) else imp_id
+            if imp_id_scalar not in self.group_predictions:
+                self.group_predictions[imp_id_scalar] = []
+            self.group_predictions[imp_id_scalar].extend(prob if isinstance(prob, list) else [prob])
 
 
 def compute_mrr_score(y_true: np.ndarray, y_score: np.ndarray):

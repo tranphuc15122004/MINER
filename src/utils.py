@@ -116,15 +116,30 @@ def padded_stack(tensors: Union[List[Tensor], List[List]], padding: int = 0):
     """
     if type(tensors[0]) == list:
         tensors = [torch.tensor(tensor) for tensor in tensors]
+    
+    # Fast path for 1D or 2D tensors using optimized operations
     n_dim = len(list(tensors[0].shape))
-    max_shape = [max([tensor.shape[d] for tensor in tensors]) for d in range(n_dim)]
-    padded_tensors = []
-
-    for tensor in tensors:
-        extended_tensor = expand_tensor(tensor, max_shape, fill=padding)
-        padded_tensors.append(extended_tensor)
-
-    return torch.stack(padded_tensors)
+    
+    if n_dim == 1:
+        # Use pad_sequence for 1D - much faster than manual padding
+        return torch.nn.utils.rnn.pad_sequence(tensors, batch_first=True, padding_value=padding)
+    elif n_dim == 2:
+        # For 2D tensors, pad each dimension separately
+        max_shape = [max([tensor.shape[d] for tensor in tensors]) for d in range(n_dim)]
+        # Pre-allocate result tensor (much faster than appending)
+        result = torch.full((len(tensors), *max_shape), padding, dtype=tensors[0].dtype)
+        for i, tensor in enumerate(tensors):
+            slices = tuple(slice(0, s) for s in tensor.shape)
+            result[i][slices] = tensor
+        return result
+    else:
+        # Fallback for higher dimensions
+        max_shape = [max([tensor.shape[d] for tensor in tensors]) for d in range(n_dim)]
+        padded_tensors = []
+        for tensor in tensors:
+            extended_tensor = expand_tensor(tensor, max_shape, fill=padding)
+            padded_tensors.append(extended_tensor)
+        return torch.stack(padded_tensors)
 
 
 def expand_tensor(tensor: Tensor, extended_shape: List[int], fill: int = 0):
