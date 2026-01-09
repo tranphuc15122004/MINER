@@ -9,7 +9,8 @@
 --seed 36
 #--save_eval_result
 --metrics auc mrr ndcg@5 ndcg@10
---evaluation_info metrics
+# Disable metrics evaluation to save memory during submission
+# --evaluation_info metrics
 
 # Model args
 --pretrained_embedding distilroberta-base
@@ -24,11 +25,11 @@
 
 # Eval args
 --data_name MIND
---eval_behaviors_path data/MINDlarge_test/MINDlarge_test/behaviors.tsv
+--eval_behaviors_path data/MINDlarge_test/MINDlarge_test/small_behaviors.tsv
 --eval_news_path data/MINDlarge_test/MINDlarge_test/news.tsv
 --saved_model_path checkpoint/bestAucModel.pt
 --eval_batch_size 512
 --fp16
---dataloader_num_workers 10
+--dataloader_num_workers 8
 --dataloader_pin_memory
 --use_multi_gpu

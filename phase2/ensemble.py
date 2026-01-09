@@ -20,11 +20,16 @@ from datetime import datetime
 
 
 
-def get_prod_predict(path: str = 'checkpoint/prediction_prod.txt'):
+def get_prod_predict(path: str = 'checkpoint/prediction_prod.txt', auto_convert_rank: bool = True):
     """Parse a prediction file of the form:
     <impression_id> [score1,score2,...]
 
     Returns a dict mapping impression_id (int) -> list[float].
+    
+    Args:
+        path: Path to prediction file
+        auto_convert_rank: If True, automatically detect and convert rank format to scores
+                          (rank format: lower is better, score format: higher is better)
     """
     import ast
     results = {}
@@ -60,6 +65,30 @@ def get_prod_predict(path: str = 'checkpoint/prediction_prod.txt'):
             except Exception:
                 impid = impid_str
             results[impid] = [float(x) for x in scores]
+    
+    # Auto-detect and convert rank format if needed
+    if auto_convert_rank and results:
+        # Check if values look like ranks (mostly integers starting from 1)
+        sample_values = []
+        for vals in list(results.values())[:min(100, len(results))]:
+            sample_values.extend(vals)
+        
+        if sample_values:
+            # Heuristic: if most values are integers, likely ranks
+            int_ratio = sum(1 for v in sample_values if v == int(v)) / len(sample_values)
+            min_val = min(sample_values)
+            ones_ratio = sum(1 for v in sample_values if v == 1.0) / len(sample_values)
+            
+            # If >90% are integers, min is 1, and many 1s exist → likely ranks
+            is_rank_format = (int_ratio > 0.9 and min_val == 1.0 and ones_ratio > 0.001)
+            
+            if is_rank_format:
+                print(f"⚠️  Detected RANK format in {path}")
+                print(f"   Converting ranks to scores using 1/rank (MIND format)")
+                # Convert: score = 1/rank
+                for imp_id in results:
+                    ranks = results[imp_id]
+                    results[imp_id] = [1.0/r for r in ranks]
 
     return results
 
@@ -105,20 +134,21 @@ def load_truth(path: str = 'phase2/ref/truth.txt'):
     return results
 
 
-def load_predictions_as_df(pred_paths: List[str], truth_path: str = None) -> pd.DataFrame:
+def load_predictions_as_df(pred_paths: List[str], truth_path: str = None, auto_convert_rank: bool = True) -> pd.DataFrame:
     """
     Load multiple prediction files và (optional) truth file thành DataFrame
     
     Args:
         pred_paths: List đường dẫn đến các file prediction
         truth_path: Đường dẫn đến file truth (optional - chỉ cần khi training/evaluating)
+        auto_convert_rank: If True, automatically detect and convert rank format to scores
         
     Returns:
         DataFrame với columns: impression_id, candidate_idx, [target], pred_0, pred_1, ...
         (target column chỉ có khi truth_path được cung cấp)
     """    
-    # Load predictions
-    pred_dicts = [get_prod_predict(path) for path in pred_paths]
+    # Load predictions with auto-conversion
+    pred_dicts = [get_prod_predict(path, auto_convert_rank=auto_convert_rank) for path in pred_paths]
     
     # Load truth if provided
     truth_dict = load_truth(truth_path) if truth_path else None

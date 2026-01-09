@@ -23,7 +23,6 @@ train/*/
 # data
 *.tsv
 
-
 # Logs
 *.log
 runs/
@@ -39,3 +38,9 @@ log/
 # OS
 .DS_Store
 Thumbs.db
+
+# phase2 ensemble results
+phase2/ensemble_results/final_infer/
+phase2/ensemble_results/universal_demo_infer/
+
+checkpoint/

@@ -1,10 +1,12 @@
+import gc
 import json
 import math
 import os
+import signal
+import sys
 import time
 from typing import List
 import random
-
 
 import torch
 try:
@@ -28,6 +30,54 @@ from src.loss import Loss
 from src.reader import Reader
 
 
+class CleanupHandler:
+    """Global handler for cleanup on interrupts"""
+    _dataloader = None
+    _file_handle = None
+    
+    @classmethod
+    def register_dataloader(cls, dataloader):
+        cls._dataloader = dataloader
+    
+    @classmethod
+    def register_file(cls, file_handle):
+        cls._file_handle = file_handle
+    
+    @classmethod
+    def cleanup(cls, signum=None, frame=None):
+        """Cleanup resources on interrupt"""
+        print("\n[INTERRUPT] Cleaning up resources...")
+        
+        # Close file handle
+        if cls._file_handle:
+            try:
+                cls._file_handle.close()
+                print("File handle closed")
+            except Exception:
+                pass
+        
+        # Cleanup dataloader
+        if cls._dataloader is not None and hasattr(cls._dataloader, '_iterator'):
+            try:
+                if cls._dataloader._iterator is not None:
+                    cls._dataloader._iterator._shutdown_workers()
+                print("DataLoader workers shutdown")
+            except Exception:
+                pass
+        
+        # Clear CUDA cache
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            torch.cuda.synchronize()
+            print("CUDA cache cleared")
+        
+        gc.collect()
+        print("Cleanup complete")
+        
+        if signum is not None:
+            sys.exit(1)
+
+
 class Trainer(BaseTrainer):
     def __init__(self, args):
         super().__init__(args)
@@ -43,6 +93,10 @@ class Trainer(BaseTrainer):
                 self.scaler = GradScaler()
             else:
                 self.scaler = None
+        
+        # Register signal handlers for graceful shutdown
+        signal.signal(signal.SIGINT, CleanupHandler.cleanup)
+        signal.signal(signal.SIGTERM, CleanupHandler.cleanup)
 
     def train(self):
         args = self.args
@@ -366,61 +420,121 @@ class Trainer(BaseTrainer):
         
         dataset.set_mode(Dataset.EVAL_MODE)
         
-        # For saving prediction results
+        # For saving prediction results - use file streaming to avoid OOM
         impression_predictions = {} if save_result else None
+        impression_sizes_cache = None
+        pred_file = None
+        dataloader = None
         
-        # Configure DataLoader based on num_workers
-        dataloader_kwargs = {
-            'batch_size': self.args.eval_batch_size,
-            'shuffle': False,
-            'num_workers': self.args.dataloader_num_workers,
-            'collate_fn': self._collate_fn,
-            'drop_last': False,
-            'pin_memory': True
-        }
-        
-        # Only add multiprocessing options when num_workers > 0
-        if self.args.dataloader_num_workers > 0:
-            dataloader_kwargs['persistent_workers'] = True
-            dataloader_kwargs['prefetch_factor'] = 2  # Reduced from 4 to save memory
-        
-        dataloader = DataLoader(dataset, **dataloader_kwargs)
-        total_pos_example = 0
-        batch_counter = 0
-        with torch.no_grad():
-            for batch in tqdm(dataloader, total=len(dataloader), desc='Evaluation phase'):
-                # Don't move the entire batch to device yet - we'll handle it in _forward_step_with_cache
-                # Use FP16 for evaluation if enabled
-                if self.args.fp16:
-                    with torch.cuda.amp.autocast():
-                        poly_attn, logits = self._forward_step_with_cache(model, batch, news_embeddings_cache, encoded_news_ids, debug=False)
-                else:
-                    poly_attn, logits = self._forward_step_with_cache(model, batch, news_embeddings_cache, encoded_news_ids, debug=False)
+        try:
+            if save_result:
+                # Pre-compute impression sizes ONCE to avoid O(n) overhead on each flush
+                impression_sizes_cache = {}
+                for sample in dataset.samples:
+                    imp_id = sample.impression.impression_id
+                    impression_sizes_cache[imp_id] = impression_sizes_cache.get(imp_id, 0) + 1
+                self._logger.info(f'Pre-computed sizes for {len(impression_sizes_cache)} unique impressions')
                 
-                # Collect predictions for saving if needed
-                if save_result:
-                    probs = torch.sigmoid(logits).cpu()
-                    impression_ids = batch['impression_id']
-                    candidate_news_ids = batch['candidate_news_ids']
+                pred_file = open(os.path.join(self._path, 'prediction_prod.txt'), 'w', encoding='utf-8', buffering=8192*16)
+                CleanupHandler.register_file(pred_file)
+            
+            # Configure DataLoader based on num_workers
+            dataloader_kwargs = {
+                'batch_size': self.args.eval_batch_size,
+                'shuffle': False,
+                'num_workers': self.args.dataloader_num_workers,
+                'collate_fn': self._collate_fn,
+                'drop_last': False,
+                'pin_memory': True
+            }
+            
+            # Only add multiprocessing options when num_workers > 0
+            if self.args.dataloader_num_workers > 0:
+                dataloader_kwargs['persistent_workers'] = True
+                dataloader_kwargs['prefetch_factor'] = 2  # Reduced from 4 to save memory
+            
+            dataloader = DataLoader(dataset, **dataloader_kwargs)
+            CleanupHandler.register_dataloader(dataloader)
+            total_pos_example = 0
+            batch_counter = 0
+            
+            with torch.no_grad():
+                for batch in tqdm(dataloader, total=len(dataloader), desc='Evaluation phase'):
+                    # Don't move the entire batch to device yet - we'll handle it in _forward_step_with_cache
+                    # Use FP16 for evaluation if enabled
+                    if self.args.fp16:
+                        with torch.cuda.amp.autocast():
+                            poly_attn, logits = self._forward_step_with_cache(model, batch, news_embeddings_cache, encoded_news_ids, debug=False)
+                    else:
+                        poly_attn, logits = self._forward_step_with_cache(model, batch, news_embeddings_cache, encoded_news_ids, debug=False)
                     
-                    for idx in range(len(impression_ids)):
-                        imp_id = int(impression_ids[idx][0]) if isinstance(impression_ids[idx], list) else int(impression_ids[idx])
-                        score = float(probs[idx][0])
-                        news_id = candidate_news_ids[idx][0]
+                    # Collect predictions for saving if needed
+                    if save_result:
+                        probs = torch.sigmoid(logits).cpu()
+                        impression_ids = batch['impression_id']
+                        candidate_news_ids = batch['candidate_news_ids']
                         
-                        if imp_id not in impression_predictions:
-                            impression_predictions[imp_id] = []
-                        impression_predictions[imp_id].append((news_id, score))
+                        for idx in range(len(impression_ids)):
+                            imp_id = int(impression_ids[idx][0]) if isinstance(impression_ids[idx], list) else int(impression_ids[idx])
+                            score = float(probs[idx][0])
+                            news_id = candidate_news_ids[idx][0]
+                            
+                            if imp_id not in impression_predictions:
+                                impression_predictions[imp_id] = []
+                            impression_predictions[imp_id].append((news_id, score))
+                        
+                        # Flush completed impressions to file to save memory
+                        # Flush every 1000 batches or when dict size > 10000 to prevent memory buildup
+                        if (batch_counter % 30000 == 0 or len(impression_predictions) > 500000) and impression_predictions:
+                            flushed_count = self._flush_predictions_to_file(pred_file, impression_predictions, impression_sizes_cache, force_all=False)
+                            gc.collect()  # Force garbage collection
+                            self._logger.info(f'[BATCH {batch_counter}] Flushed {flushed_count} completed impressions, {len(impression_predictions)} remain in memory')
 
-                batch_counter += 1
+                    batch_counter += 1
 
-        # Save prediction results in CodaLab format if requested
-        if save_result and impression_predictions:
-            self._save_prediction_file(impression_predictions)
-
-        # Restore original samples if we sampled
-        if original_samples is not None:
-            dataset._samples = original_samples
+            # Save remaining prediction results (force flush all)
+            if save_result:
+                if impression_predictions:
+                    flushed_count = self._flush_predictions_to_file(pred_file, impression_predictions, impression_sizes_cache, force_all=True)
+                    self._logger.info(f'[FINAL] Flushed {flushed_count} remaining impressions')
+                
+        finally:
+            # Cleanup resources to prevent zombie processes
+            if pred_file:
+                try:
+                    pred_file.close()
+                    self._logger.info(f'Prediction file saved to: {os.path.join(self._path, "prediction_prod.txt")}')
+                except Exception as e:
+                    self._logger.error(f'Error closing prediction file: {e}')
+            
+            # Explicitly cleanup DataLoader workers
+            if dataloader is not None and hasattr(dataloader, '_iterator'):
+                try:
+                    if dataloader._iterator is not None:
+                        dataloader._iterator._shutdown_workers()
+                except Exception:
+                    pass
+            
+            # Delete dataloader to free workers
+            if dataloader is not None:
+                del dataloader
+            
+            # Clear prediction cache
+            if impression_predictions:
+                impression_predictions.clear()
+            del impression_predictions
+            
+            # Clear CUDA cache to free GPU memory
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                torch.cuda.synchronize()
+            
+            # Force garbage collection
+            gc.collect()
+            
+            # Restore original samples if we sampled
+            if original_samples is not None:
+                dataset._samples = original_samples
 
 
     def _train_step(self, batch, model, loss_calculator, accumulation_factor: int):
@@ -466,93 +580,159 @@ class Trainer(BaseTrainer):
         else:
             evaluator = SlowEvaluator(dataset)
         
-        # For saving prediction results
+        # For saving prediction results - use file streaming to avoid OOM
         impression_predictions = {} if save_result else None
+        impression_sizes_cache = None
+        pred_file = None
+        dataloader = None
+        loss = None
+        scores = None
         
-        # Configure DataLoader based on num_workers
-        dataloader_kwargs = {
-            'batch_size': self.args.eval_batch_size,
-            'shuffle': False,
-            'num_workers': self.args.dataloader_num_workers,
-            'collate_fn': self._collate_fn,
-            'drop_last': False,
-            'pin_memory': True
-        }
-        
-        # Only add multiprocessing options when num_workers > 0
-        if self.args.dataloader_num_workers > 0:
-            dataloader_kwargs['persistent_workers'] = True
-            dataloader_kwargs['prefetch_factor'] = 2  # Reduced from 4 to save memory
-        
-        dataloader = DataLoader(dataset, **dataloader_kwargs)
-        total_loss = 0.0
-        total_pos_example = 0
-        batch_counter = 0
-        prev_batch_end = time.time()
-        with torch.no_grad():
-            for batch in tqdm(dataloader, total=len(dataloader), desc='Evaluation phase'):
-                dataloader_time = time.time() - prev_batch_end
-                batch_start = time.time()
-                # Don't move the entire batch to device yet - we'll handle it in _forward_step_with_cache
-                # Use FP16 for evaluation if enabled
-                if self.args.fp16:
-                    with torch.cuda.amp.autocast():
+        try:
+            if save_result:
+                # Pre-compute impression sizes ONCE to avoid O(n) overhead on each flush
+                impression_sizes_cache = {}
+                for sample in dataset.samples:
+                    imp_id = sample.impression.impression_id
+                    impression_sizes_cache[imp_id] = impression_sizes_cache.get(imp_id, 0) + 1
+                self._logger.info(f'Pre-computed sizes for {len(impression_sizes_cache)} unique impressions')
+                
+                pred_file = open(os.path.join(self._path, 'prediction_prod.txt'), 'w', encoding='utf-8', buffering=8192*16)
+                CleanupHandler.register_file(pred_file)
+            
+            # Configure DataLoader based on num_workers
+            dataloader_kwargs = {
+                'batch_size': self.args.eval_batch_size,
+                'shuffle': False,
+                'num_workers': self.args.dataloader_num_workers,
+                'collate_fn': self._collate_fn,
+                'drop_last': False,
+                'pin_memory': True
+            }
+            
+            # Only add multiprocessing options when num_workers > 0
+            if self.args.dataloader_num_workers > 0:
+                dataloader_kwargs['persistent_workers'] = True
+                dataloader_kwargs['prefetch_factor'] = 2  # Reduced from 4 to save memory
+            
+            dataloader = DataLoader(dataset, **dataloader_kwargs)
+            CleanupHandler.register_dataloader(dataloader)
+            total_loss = 0.0
+            total_pos_example = 0
+            batch_counter = 0
+            prev_batch_end = time.time()
+            
+            with torch.no_grad():
+                for batch in tqdm(dataloader, total=len(dataloader), desc='Evaluation phase'):
+                    dataloader_time = time.time() - prev_batch_end
+                    batch_start = time.time()
+                    # Don't move the entire batch to device yet - we'll handle it in _forward_step_with_cache
+                    # Use FP16 for evaluation if enabled
+                    if self.args.fp16:
+                        with torch.cuda.amp.autocast():
+                            poly_attn, logits = self._forward_step_with_cache(model, batch, news_embeddings_cache, encoded_news_ids, debug=False)
+                    else:
                         poly_attn, logits = self._forward_step_with_cache(model, batch, news_embeddings_cache, encoded_news_ids, debug=False)
-                else:
-                    poly_attn, logits = self._forward_step_with_cache(model, batch, news_embeddings_cache, encoded_news_ids, debug=False)
-                forward_end = time.time()
-                 
-                if 'loss' in self.args.evaluation_info:
-                    batch_loss = loss_calculator.compute_eval_loss(poly_attn, logits, batch['label'].to(self._device))
-                    total_loss += batch_loss
-                    total_pos_example += batch['label'].sum().item()
-                loss_end = time.time()
-                
-                if 'metrics' in self.args.evaluation_info:
-                    evaluator.eval_batch(logits, batch['impression_id'])
-                eval_end = time.time()
-                
-                # Collect predictions for saving if needed
-                if save_result:
-                    probs = torch.sigmoid(logits).cpu()
-                    impression_ids = batch['impression_id']
-                    candidate_news_ids = batch['candidate_news_ids']
+                    forward_end = time.time()
+                     
+                    if 'loss' in self.args.evaluation_info:
+                        batch_loss = loss_calculator.compute_eval_loss(poly_attn, logits, batch['label'].to(self._device))
+                        total_loss += batch_loss
+                        total_pos_example += batch['label'].sum().item()
+                    loss_end = time.time()
                     
-                    for idx in range(len(impression_ids)):
-                        imp_id = int(impression_ids[idx][0]) if isinstance(impression_ids[idx], list) else int(impression_ids[idx])
-                        score = float(probs[idx][0])
-                        news_id = candidate_news_ids[idx][0]
+                    if 'metrics' in self.args.evaluation_info:
+                        evaluator.eval_batch(logits, batch['impression_id'])
+                    eval_end = time.time()
+                    
+                    # Collect predictions for saving if needed
+                    if save_result:
+                        probs = torch.sigmoid(logits).cpu()
+                        impression_ids = batch['impression_id']
+                        candidate_news_ids = batch['candidate_news_ids']
                         
-                        if imp_id not in impression_predictions:
-                            impression_predictions[imp_id] = []
-                        impression_predictions[imp_id].append((news_id, score))
+                        for idx in range(len(impression_ids)):
+                            imp_id = int(impression_ids[idx][0]) if isinstance(impression_ids[idx], list) else int(impression_ids[idx])
+                            score = float(probs[idx][0])
+                            news_id = candidate_news_ids[idx][0]
+                            
+                            if imp_id not in impression_predictions:
+                                impression_predictions[imp_id] = []
+                            impression_predictions[imp_id].append((news_id, score))
+                        
+                        # Flush completed impressions to file to save memory
+                        # Flush every 1000 batches or when dict size > 10000 to prevent memory buildup
+                        if (batch_counter % 20000 == 0 or len(impression_predictions) > 500000) and impression_predictions:
+                            flushed_count = self._flush_predictions_to_file(pred_file, impression_predictions, impression_sizes_cache, force_all=False)
+                            gc.collect()  # Force garbage collection
+                            self._logger.info(f'[BATCH {batch_counter}] Flushed {flushed_count} completed impressions, {len(impression_predictions)} remain in memory')
+                    
+                    """ if batch_counter % 100 == 0:
+                        print(f"\n[BATCH TIMING {batch_counter}]")
+                        print(f"  ⚠️  DATALOADER WAIT: {dataloader_time*1000:.2f}ms <- BOTTLENECK!")
+                        print(f"  Forward pass: {(forward_end-batch_start)*1000:.2f}ms")
+                        print(f"  Loss compute: {(loss_end-forward_end)*1000:.2f}ms")
+                        print(f"  Evaluator: {(eval_end-loss_end)*1000:.2f}ms")
+                        print(f"  TOTAL batch work: {(eval_end-batch_start)*1000:.2f}ms") """
+                    batch_counter += 1
+                    prev_batch_end = time.time()
+
+            if 'loss' in self.args.evaluation_info:
+                loss = total_loss / total_pos_example
+            else:
+                loss = None
+            if 'metrics' in self.args.evaluation_info:
+                scores = evaluator.compute_scores(metrics, save_result, self._path)
+            else:
+                scores = None
+
+            # Save remaining prediction results (force flush all)
+            if save_result:
+                if impression_predictions:
+                    flushed_count = self._flush_predictions_to_file(pred_file, impression_predictions, impression_sizes_cache, force_all=True)
+                    self._logger.info(f'[FINAL] Flushed {flushed_count} remaining impressions')
                 
-                """ if batch_counter % 100 == 0:
-                    print(f"\n[BATCH TIMING {batch_counter}]")
-                    print(f"  ⚠️  DATALOADER WAIT: {dataloader_time*1000:.2f}ms <- BOTTLENECK!")
-                    print(f"  Forward pass: {(forward_end-batch_start)*1000:.2f}ms")
-                    print(f"  Loss compute: {(loss_end-forward_end)*1000:.2f}ms")
-                    print(f"  Evaluator: {(eval_end-loss_end)*1000:.2f}ms")
-                    print(f"  TOTAL batch work: {(eval_end-batch_start)*1000:.2f}ms") """
-                batch_counter += 1
-                prev_batch_end = time.time()
-
-        if 'loss' in self.args.evaluation_info:
-            loss = total_loss / total_pos_example
-        else:
-            loss = None
-        if 'metrics' in self.args.evaluation_info:
-            scores = evaluator.compute_scores(metrics, save_result, self._path)
-        else:
-            scores = None
-
-        # Save prediction results in CodaLab format if requested
-        if save_result and impression_predictions:
-            self._save_prediction_file(impression_predictions)
-
-        # Restore original samples if we sampled
-        if original_samples is not None:
-            dataset._samples = original_samples
+        finally:
+            # Cleanup resources to prevent zombie processes
+            if pred_file:
+                try:
+                    pred_file.close()
+                    self._logger.info(f'Prediction file saved to: {os.path.join(self._path, "prediction_prod.txt")}')
+                except Exception as e:
+                    self._logger.error(f'Error closing prediction file: {e}')
+            
+            # Explicitly cleanup DataLoader workers
+            if dataloader is not None and hasattr(dataloader, '_iterator'):
+                try:
+                    if dataloader._iterator is not None:
+                        dataloader._iterator._shutdown_workers()
+                except Exception:
+                    pass
+            
+            # Delete dataloader to free workers
+            if dataloader is not None:
+                del dataloader
+            
+            # Clear prediction cache
+            if impression_predictions:
+                impression_predictions.clear()
+            del impression_predictions
+            
+            # Clear evaluator cache
+            if 'evaluator' in locals():
+                del evaluator
+            
+            # Clear CUDA cache to free GPU memory
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                torch.cuda.synchronize()
+            
+            # Force garbage collection
+            gc.collect()
+            
+            # Restore original samples if we sampled
+            if original_samples is not None:
+                dataset._samples = original_samples
 
         return loss, scores
 
@@ -562,6 +742,45 @@ class Trainer(BaseTrainer):
         loss_calculator = Loss(criterion)
 
         return loss_calculator
+
+    def _flush_predictions_to_file(self, file_handle, impression_predictions, impression_sizes_cache, force_all=False):
+        """
+        Write impressions to file and clear from memory.
+        
+        Args:
+            file_handle: open file handle to write to
+            impression_predictions: dict of impression_id -> [(news_id, score), ...]
+            impression_sizes_cache: pre-computed dict of impression_id -> expected size
+            force_all: if True, write all impressions regardless of completion status
+        """
+        if not impression_predictions:
+            return 0
+        
+        # Write impressions
+        flushed_imps = []
+        for imp_id, predictions in impression_predictions.items():
+            # Check if impression is complete
+            expected_size = impression_sizes_cache.get(imp_id, len(predictions))
+            is_complete = len(predictions) >= expected_size
+            
+            # Write if complete OR if force_all is True
+            if is_complete or force_all:
+                # Write scores for this impression
+                scores = [score for _, score in predictions]
+                scores_str = ','.join([f'{s:.6f}' for s in scores])
+                file_handle.write(f'{imp_id} [{scores_str}]\n')
+                flushed_imps.append(imp_id)
+        
+        # Remove flushed impressions from memory
+        for imp_id in flushed_imps:
+            del impression_predictions[imp_id]
+        
+        # Flush to disk immediately
+        if file_handle:
+            file_handle.flush()
+            os.fsync(file_handle.fileno())
+        
+        return len(flushed_imps)
 
     def _save_prediction_file(self, impression_predictions):
         """
@@ -654,6 +873,9 @@ class Trainer(BaseTrainer):
         unique_news = dataset.get_all_unique_news()
         max_news_id = max(news.news_id for news in unique_news)
         
+        # Handle DataParallel wrapper - extract the underlying model
+        actual_model = model.module if isinstance(model, nn.DataParallel) else model
+        
         # Create tensor-based cache for O(1) indexing instead of dict lookup
         embedding_dim = 256 if hasattr(self.args, 'word_embed_dim') else 768
         news_embeddings_tensor = torch.zeros(max_news_id + 1, embedding_dim, dtype=torch.float32)
@@ -664,42 +886,48 @@ class Trainer(BaseTrainer):
         batch_size = self.args.eval_batch_size
         num_batches = (len(unique_news) + batch_size - 1) // batch_size
         
-        for i in tqdm(range(0, len(unique_news), batch_size), 
-                      total=num_batches, 
-                      desc='Encoding news embeddings'):
-            batch_news = unique_news[i:i + batch_size]
-            
-            # Prepare batch
-            titles = [news.title for news in batch_news]
-            sapos = [news.sapo for news in batch_news]
-            
-            titles = utils.padded_stack(titles, padding=self._tokenizer.pad_token_id).to(self._device)
-            sapos = utils.padded_stack(sapos, padding=self._tokenizer.pad_token_id).to(self._device)
-            title_masks = (titles != self._tokenizer.pad_token_id)
-            sapo_masks = (sapos != self._tokenizer.pad_token_id)
-            
-            # Encode
-            if self.args.fp16:
-                try:
-                    with torch.amp.autocast('cuda'):
-                        embeddings = model.news_encoder(title_encoding=titles, title_attn_mask=title_masks,
-                                                       sapo_encoding=sapos, sapo_attn_mask=sapo_masks)
-                except AttributeError:
-                    with torch.cuda.amp.autocast():
-                        embeddings = model.news_encoder(title_encoding=titles, title_attn_mask=title_masks,
-                                                       sapo_encoding=sapos, sapo_attn_mask=sapo_masks)
-            else:
-                embeddings = model.news_encoder(title_encoding=titles, title_attn_mask=title_masks,
-                                              sapo_encoding=sapos, sapo_attn_mask=sapo_masks)
-            
-            # Cache embeddings in tensor - stay on CPU to save GPU memory
-            for j, news in enumerate(batch_news):
-                news_embeddings_tensor[news.news_id] = embeddings[j].detach().cpu()
-                encoded_news_ids.add(news.news_id)  # Track encoded IDs
-            
-            # Clear GPU cache periodically
-            if (i // batch_size) % 50 == 0:
-                torch.cuda.empty_cache()
+        try:
+            for i in tqdm(range(0, len(unique_news), batch_size), 
+                          total=num_batches, 
+                          desc='Encoding news embeddings'):
+                batch_news = unique_news[i:i + batch_size]
+                
+                # Prepare batch
+                titles = [news.title for news in batch_news]
+                sapos = [news.sapo for news in batch_news]
+                
+                titles = utils.padded_stack(titles, padding=self._tokenizer.pad_token_id).to(self._device)
+                sapos = utils.padded_stack(sapos, padding=self._tokenizer.pad_token_id).to(self._device)
+                title_masks = (titles != self._tokenizer.pad_token_id)
+                sapo_masks = (sapos != self._tokenizer.pad_token_id)
+                
+                # Encode using the actual model (not the wrapper)
+                if self.args.fp16:
+                    try:
+                        with torch.amp.autocast('cuda'):
+                            embeddings = actual_model.news_encoder(title_encoding=titles, title_attn_mask=title_masks,
+                                                           sapo_encoding=sapos, sapo_attn_mask=sapo_masks)
+                    except AttributeError:
+                        with torch.cuda.amp.autocast():
+                            embeddings = actual_model.news_encoder(title_encoding=titles, title_attn_mask=title_masks,
+                                                           sapo_encoding=sapos, sapo_attn_mask=sapo_masks)
+                else:
+                    embeddings = actual_model.news_encoder(title_encoding=titles, title_attn_mask=title_masks,
+                                                  sapo_encoding=sapos, sapo_attn_mask=sapo_masks)
+                
+                # Cache embeddings in tensor - stay on CPU to save GPU memory
+                for j, news in enumerate(batch_news):
+                    news_embeddings_tensor[news.news_id] = embeddings[j].detach().cpu()
+                    encoded_news_ids.add(news.news_id)  # Track encoded IDs
+                
+                # Clear GPU cache periodically
+                if (i // batch_size) % 50 == 0:
+                    torch.cuda.empty_cache()
+        
+        finally:
+            # Final cleanup
+            torch.cuda.empty_cache()
+            gc.collect()
         
         return (news_embeddings_tensor, encoded_news_ids)
     
@@ -707,6 +935,9 @@ class Trainer(BaseTrainer):
         """Forward step using pre-cached news embeddings - OPTIMIZED with tensor indexing"""
         from src.utils import pairwise_cosine_similarity
         import time
+        
+        # Handle DataParallel wrapper - extract the underlying model
+        actual_model = model.module if isinstance(model, nn.DataParallel) else model
         
         batch_size = batch['his_title'].shape[0]
         num_candidates = batch['title'].shape[1]
@@ -803,26 +1034,26 @@ class Trainer(BaseTrainer):
             print(f"  Cand IDs range: [{min(all_cand_ids)}, {max(all_cand_ids)}], count: {len(all_cand_ids)}") """
         
         t8 = time.time()
-        # Category bias and poly attention (SAME AS ORIGINAL)
-        if model.use_category_bias:
-            his_category_embed = model.category_embedding(his_category)
-            his_category_embed = model.category_dropout(his_category_embed)
-            candidate_category_embed = model.category_embedding(candidate_category)
-            candidate_category_embed = model.category_dropout(candidate_category_embed)
+        # Category bias and poly attention - use actual_model
+        if actual_model.use_category_bias:
+            his_category_embed = actual_model.category_embedding(his_category)
+            his_category_embed = actual_model.category_dropout(his_category_embed)
+            candidate_category_embed = actual_model.category_embedding(candidate_category)
+            candidate_category_embed = actual_model.category_dropout(candidate_category_embed)
             category_bias = pairwise_cosine_similarity(his_category_embed, candidate_category_embed)
-            multi_user_interest = model.poly_attn(embeddings=history_repr, attn_mask=his_mask, bias=category_bias)
+            multi_user_interest = actual_model.poly_attn(embeddings=history_repr, attn_mask=his_mask, bias=category_bias)
         else:
-            multi_user_interest = model.poly_attn(embeddings=history_repr, attn_mask=his_mask, bias=None)
+            multi_user_interest = actual_model.poly_attn(embeddings=history_repr, attn_mask=his_mask, bias=None)
         t9 = time.time()
         
-        # Click predictor (SAME AS ORIGINAL)
+        # Click predictor - use actual_model
         matching_scores = torch.matmul(candidate_repr, multi_user_interest.permute(0, 2, 1))
-        if model.score_type == 'max':
+        if actual_model.score_type == 'max':
             matching_scores = matching_scores.max(dim=2)[0]
-        elif model.score_type == 'mean':
+        elif actual_model.score_type == 'mean':
             matching_scores = matching_scores.mean(dim=2)
-        elif model.score_type == 'weighted':
-            matching_scores = model.target_aware_attn(query=multi_user_interest, key=candidate_repr, value=matching_scores)
+        elif actual_model.score_type == 'weighted':
+            matching_scores = actual_model.target_aware_attn(query=multi_user_interest, key=candidate_repr, value=matching_scores)
         
         if debug:
             self._logger.info(f"  matching_scores shape: {matching_scores.shape}")

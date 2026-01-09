@@ -29,15 +29,15 @@ def main():
     
     # Paths
     predictions = [
-        'checkpoint/prediction_prod_Phuc.txt',
-        'checkpoint/prediction_prod_Phuc.txt',
-        'checkpoint/prediction_prod_Phuc.txt'  # Using same file twice for demo
+        'checkpoint/prediction_P.txt',
+        'checkpoint/prediction_S.txt',
+        'checkpoint/prediction_N.txt'  
     ]
     
     weighted_dir = 'phase2/ensemble_results/weighted_mean'
     stacking_dir = 'phase2/ensemble_results/stacking'
     truth_file = 'phase2/ref/truth.txt' if args.mode == 'eval' else None
-    output_dir = f'phase2/ensemble_results/universal_demo_{args.mode}'
+    output_dir = f'phase2/ensemble_results/final_{args.mode}'
     
     print(f"\n📋 Configuration (Mode: {args.mode.upper()}):")
     print(f"  Predictions: {len(predictions)} files")

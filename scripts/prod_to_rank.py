@@ -46,8 +46,8 @@ def convert_line(line: str):
 
 def main():
     parser = argparse.ArgumentParser(description='Convert prod prediction file to rank file')
-    parser.add_argument('input', help='Input prod file (e.g., checkpoint/prediction_prod_Son.txt)')
-    parser.add_argument('output', help='Output rank file (e.g., checkpoint/prediction_rank_Son.txt)')
+    parser.add_argument('--input', help='Input prod file (e.g., checkpoint/prediction_prod_Son.txt)')
+    parser.add_argument('--output', help='Output rank file (e.g., checkpoint/prediction_rank_Son.txt)')
     args = parser.parse_args()
 
     with open(args.input, 'r', encoding='utf-8') as fin, open(args.output, 'w', encoding='utf-8') as fout:

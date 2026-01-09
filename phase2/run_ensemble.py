@@ -28,7 +28,7 @@ def main():
                         help='Output directory')
     parser.add_argument('--n-trials', type=int, default=500,
                         help='Number of Optuna trials for weighted mean')
-    parser.add_argument('--n-folds', type=int, default=8,
+    parser.add_argument('--n-folds', type=int, default=10,
                         help='Number of folds for stacking')
     parser.add_argument('--sampling-rate-weighted', type=int, default=100,
                         help='Sample every N impressions for weighted mean optimization')
