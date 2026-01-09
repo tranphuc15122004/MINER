@@ -341,25 +341,6 @@ MINER/
         └── *.pt
 ```
 
-## 📈 Kết quả
-
-### Single Model Performance
-
-| Model | AUC | MRR | nDCG@5 | nDCG@10 |
-|-------|-----|-----|--------|---------|
-| MINER (base) | 0.6823 | 0.3245 | 0.3512 | 0.4089 |
-| MINER (+ category) | 0.6891 | 0.3298 | 0.3567 | 0.4142 |
-| MINER (+ sapo) | 0.6954 | 0.3351 | 0.3623 | 0.4198 |
-
-### Ensemble Performance
-
-| Method | AUC | MRR | nDCG@5 | nDCG@10 |
-|--------|-----|-----|--------|---------|
-| Weighted Mean | 0.7012 | 0.3389 | 0.3661 | 0.4236 |
-| Stacking | 0.7048 | 0.3412 | 0.3684 | 0.4259 |
-
-*Kết quả trên MINDlarge validation set*
-
 ## 📚 Tài liệu tham khảo
 
 ### Papers
