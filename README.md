@@ -1,4 +1,4 @@
-# MINER - Multi-Interest News Recommendation
+# MINER — Multi-Interest News Recommendation
 
 [![Python](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
 [![PyTorch](https://img.shields.io/badge/PyTorch-2.1.0-red.svg)](https://pytorch.org/)
@@ -6,38 +6,103 @@
 
 Triển khai mô hình **MINER (Multi-Interest Network for News Recommendation)** dựa trên paper [ACL 2022 Findings](https://aclanthology.org/2022.findings-acl.29.pdf), áp dụng cho bài toán gợi ý tin tức trên **MIND Large dataset**.
 
+> Dự án được phát triển trong khuôn khổ một cuộc thi **News Recommendation**, bao gồm MINER làm backbone chính, **NRMS** (Neural News Recommendation with Multi-Head Self-Attention) và SpeedyRec/Fastformer như các sub-module phụ, cùng một framework ensemble (Weighted Mean + Stacking) để cải thiện kết quả cuối cùng.
+
+---
+
 ## 📋 Mục lục
 
 - [Tổng quan](#-tổng-quan)
 - [Kiến trúc mô hình](#-kiến-trúc-mô-hình)
+- [Kết quả](#-kết-quả)
 - [Cài đặt](#-cài-đặt)
 - [Chuẩn bị dữ liệu](#-chuẩn-bị-dữ-liệu)
 - [Sử dụng](#-sử-dụng)
-  - [Training](#1-training)
-  - [Evaluation](#2-evaluation)
-  - [Submission Generation](#3-submission-generation)
 - [Ensemble Methods](#-ensemble-methods)
-- [Kết quả](#-kết-quả)
+- [Sub-module: NRMS](#-sub-module-nrms)
 - [Cấu trúc thư mục](#-cấu-trúc-thư-mục)
 - [Tài liệu tham khảo](#-tài-liệu-tham-khảo)
 
+---
+
 ## 🎯 Tổng quan
 
-MINER là mô hình neural network cho bài toán **news recommendation**, với các đặc điểm:
+MINER là mô hình neural network cho bài toán **news recommendation** với các đặc điểm nổi bật:
+
 - **Multi-interest user modeling**: Học K interests khác nhau từ lịch sử đọc bằng Poly-Attention
 - **Category-aware attention**: Dùng category embedding làm bias để cải thiện news representation
 - **Flexible score aggregation**: Hỗ trợ `mean`, `max`, `weighted` để tổng hợp K matching scores
 - **Ensemble learning**: Kết hợp predictions từ nhiều models (Weighted Mean & Stacking)
 - **Production-ready inference**: Hỗ trợ inference không cần ground truth
 
-### Tính năng chính
+---
 
-- **News Encoder**: DistilRoBERTa encode title (và sapo nếu bật `--use_sapo`), reduce xuống 256 chiều qua Linear
-- **Category Embedding**: Embed category (300 chiều) làm attention bias (bật bằng `--use_category_bias`)
-- **Sapo Combine**: Kết hợp title + sapo qua `linear` hoặc `lstm`
-- **Poly-Attention User Encoder**: K=32 interest vectors, mỗi vector dot-product với candidate news
-- **Gradient Accumulation + fp16**: Hỗ trợ training trên GPU bộ nhớ thấp
+## 🏗️ Kiến trúc mô hình
 
+### MINER Pipeline
+
+```
+News (title + sapo)
+      │
+      ▼
+DistilRoBERTa encoder
+      │
+      ▼
+Linear projection (768 → 256 dims)   ◄── Category embedding bias (300d)
+      │
+      ▼  [News Representation]
+ ┌────┴────────────────────────────┐
+ │  Poly-Attention User Encoder   │
+ │  (K=32 interest codes)         │
+ └────┬────────────────────────────┘
+      │  K interest vectors
+      ▼
+Target-Aware Attention
+      │  score per interest
+      ▼
+Aggregation (mean / max / weighted)
+      │
+      ▼
+  Final Score
+```
+
+### Các thành phần chính
+
+| Thành phần | Mô tả |
+|---|---|
+| **News Encoder** | DistilRoBERTa encode title (và sapo nếu bật `--use_sapo`), giảm xuống 256 chiều qua Linear |
+| **Category Embedding** | Embed category (300 chiều) làm attention bias (bật bằng `--use_category_bias`) |
+| **Sapo Combine** | Kết hợp title + sapo qua `linear` hoặc `lstm` |
+| **Poly-Attention User Encoder** | K=32 interest vectors, mỗi vector dot-product với candidate news |
+| **Score Aggregation** | Tổng hợp K scores theo `mean`, `max`, hoặc attention-weighted |
+
+### Training Hyperparameters
+
+![Training Hyperparameters](asset/train_hyperparams.png)
+
+---
+
+## 📈 Kết quả
+
+### Results on MIND Small (Validation set)
+
+![Model Results — Small Test Set](asset/model_res_small_testset.png)
+
+### Results on MIND Large (Public Test Set)
+
+![Model Results — Public Test Set](asset/model_res_public_testset.png)
+
+### Phase 2 — Ensemble Results
+
+![Phase 2 Ensemble Results](asset/phase2_result.png)
+
+![Phase 2 System Results](asset/phase2_result_sys.png)
+
+### Public Leaderboard Ranking
+
+![Public Leaderboard Rank](asset/public_rank.png)
+
+---
 
 ## 🔧 Cài đặt
 
@@ -45,8 +110,8 @@ MINER là mô hình neural network cho bài toán **news recommendation**, với
 
 - Python >= 3.8
 - CUDA (khuyến nghị cho training)
-- RAM >= 16GB
-- Disk >= 50GB (cho MIND Large dataset)
+- RAM >= 16 GB
+- Disk >= 50 GB (cho MIND Large dataset)
 
 ### Cài đặt dependencies
 
@@ -66,7 +131,7 @@ pip install -r requirements.txt
 ### Dependencies chính
 
 | Package | Version | Mục đích |
-|---------|---------|---------|
+|---|---|---|
 | `torch` | 2.1.0 | Deep learning framework |
 | `transformers` | 4.37.2 | DistilRoBERTa & tokenizer |
 | `accelerate` | 0.27.2 | Mixed precision training |
@@ -74,6 +139,8 @@ pip install -r requirements.txt
 | `pandas` | 2.1.3 | Data processing |
 | `tensorboard` | 2.15.1 | Training visualization |
 | `tqdm` | 4.66.1 | Progress bars |
+
+---
 
 ## 📊 Chuẩn bị dữ liệu
 
@@ -94,6 +161,7 @@ unzip MINDlarge_test.zip -d data/MINDlarge_test/
 ```
 
 Sau khi giải nén, copy `behaviors.tsv` và `news.tsv` từ dev set vào `data/valid/`:
+
 ```bash
 cp data/MINDlarge_dev/MINDlarge_dev/behaviors.tsv data/valid/
 cp data/MINDlarge_dev/MINDlarge_dev/news.tsv data/valid/
@@ -106,8 +174,10 @@ python prepare_mind_mappings.py
 ```
 
 Script tự động đọc từ `data/MINDlarge_train/` và `data/MINDlarge_dev/`, tạo ra:
-- `data/user2id.json` - Mapping user ID → integer (bao gồm `pad` token)
-- `data/category2id.json` - Mapping category → integer
+- `data/user2id.json` — Mapping user ID → integer (bao gồm `pad` token)
+- `data/category2id.json` — Mapping category → integer
+
+---
 
 ## 🚀 Sử dụng
 
@@ -122,8 +192,8 @@ python main.py train @config/train.txt
 Config mặc định (`config/train.txt`) sử dụng:
 - PLM: `distilroberta-base`
 - title: 20 tokens, sapo: 64 tokens, lịch sử: 50 bài
-- K=32 interest codes, context_code_dim=200, word_embed_dim=256
-- batch_size=12, gradient_accumulation=32 (effective batch=384)
+- K=32 interest codes, `context_code_dim=200`, `word_embed_dim=256`
+- `batch_size=12`, `gradient_accumulation=32` (effective batch=384)
 - fp16, cosine lr scheduler, 3 epochs, lr=5e-5
 
 #### Option B: Command line
@@ -171,8 +241,8 @@ python main.py train \
 
 #### Tham số quan trọng
 
-| Tham số | Mặc định (config) | Mô tả |
-|---------|---------|---------|
+| Tham số | Mặc định | Mô tả |
+|---|---|---|
 | `--use_sapo` | bật | Encode sapo cùng title |
 | `--use_category_bias` | bật | Category embedding làm attention bias |
 | `--apply_reduce_dim` | bật | Giảm chiều RoBERTa (768 → `word_embed_dim`) |
@@ -181,8 +251,8 @@ python main.py train \
 | `--score_type` | `weighted` | Cách tổng hợp K scores (`mean`/`max`/`weighted`) |
 | `--combine_type` | `linear` | Kết hợp title+sapo (`linear`/`lstm`) |
 | `--freeze_transformer` | tắt | Freeze weights DistilRoBERTa |
-| `--resume_from_checkpoint` | - | Path checkpoint để resume/finetune |
-| `--resume_training` | - | Restore cả optimizer/scheduler (nếu resume) |
+| `--resume_from_checkpoint` | — | Path checkpoint để resume/finetune |
+| `--resume_training` | — | Restore cả optimizer/scheduler khi resume |
 
 ### 2. Evaluation
 
@@ -253,13 +323,19 @@ python main.py submission \
 
 Output: `eval/{timestamp}/prediction.txt` (format: `impression_id [rank1,rank2,...]`)
 
+---
+
 ## 🎭 Ensemble Methods
 
-Dự án hỗ trợ 2 phương pháp ensemble để cải thiện hiệu suất:
+Dự án hỗ trợ 2 phương pháp ensemble để cải thiện hiệu suất, dựa trên implementation của team **sugawarya** (RecSys Challenge 2024 Winner).
 
 ### 1. Weighted Mean Ensemble
 
 Kết hợp predictions bằng **trọng số tối ưu** (tìm bằng Bayesian Optimization với Optuna):
+
+```
+P_ensemble = w₁ × P₁ + w₂ × P₂ + ... + wₙ × Pₙ
+```
 
 ```bash
 python phase2/run_ensemble.py \
@@ -295,10 +371,20 @@ Output: `prediction_stacking_prod.txt` và `prediction_stacking_rank.txt`
 Inference **không cần ground truth** (dùng weights/model đã train từ bước trên):
 
 ```bash
+# Production mode (không cần truth)
 python phase2/universal_infer.py \
     --predictions model1_pred.txt model2_pred.txt model3_pred.txt \
     --weighted-dir phase2/ensemble_results/weighted_mean \
     --stacking-dir phase2/ensemble_results/stacking \
+    --output-dir results \
+    --methods all
+
+# Evaluation mode (có truth để tính AUC)
+python phase2/universal_infer.py \
+    --predictions model1_pred.txt model2_pred.txt model3_pred.txt \
+    --weighted-dir phase2/ensemble_results/weighted_mean \
+    --stacking-dir phase2/ensemble_results/stacking \
+    --truth phase2/ref/truth.txt \
     --output-dir results \
     --methods all
 ```
@@ -306,32 +392,107 @@ python phase2/universal_infer.py \
 ### So sánh Ensemble Methods
 
 | Method | Ưu điểm | Nhược điểm | Use case |
-|--------|---------|------------|----------|
-| **Weighted Mean** | Nhanh, dễ interpret | Chỉ linear combination | Models có AUC tương đồng |
+|---|---|---|---|
+| **Weighted Mean** | Nhanh, dễ interpret, không cần truth lúc infer | Chỉ linear combination | Models có AUC tương đồng |
 | **Stacking** | Học non-linear patterns, robust hơn | Cần truth labels để train | Models đa dạng kiến trúc |
 
-Xem thêm lý thuyết tại [phase2/ENSEMBLE_THEORY.md](phase2/ENSEMBLE_THEORY.md).
+Xem thêm lý thuyết tại [phase2/ENSEMBLE_THEORY.md](phase2/ENSEMBLE_THEORY.md) và hướng dẫn production tại [phase2/PRODUCTION_MODE_SUMMARY.md](phase2/PRODUCTION_MODE_SUMMARY.md).
 
-## 📈 Kết quả
+---
 
-Đánh giá trên **MIND Large dev set**:
+## 🧠 Sub-module: NRMS
 
-### Base Models (MINER)
+`NRMS/` là sub-module độc lập triển khai mô hình **Neural News Recommendation with Multi-Head Self-Attention (NRMS)**, sử dụng BERT/DistilBERT làm news encoder. Đây là một baseline mạnh bổ sung cho pipeline ensemble của dự án.
 
-| Model | AUC | MRR | nDCG@5 | nDCG@10 |
-|-------|-----|-----|--------|---------|
-| MINER (no_sapo, member 1) | 0.6579 | 0.3201 | 0.3521 | 0.4135 |
-| MINER (no_sapo, member 2) | 0.6653 | 0.3152 | 0.3468 | 0.4093 |
-| MINER (with sapo, best) | **0.6793** | **0.3251** | **0.3585** | **0.4233** |
+### Kiến trúc NRMS
 
-### Ensemble Results
+```
+News (title)
+      │
+      ▼
+BERT / DistilBERT encoder
+      │  [PLMBasedNewsEncoder]
+      ▼
+Additive Attention pooling
+      │  news vector
+      ▼
+ ┌────┴──────────────────────────┐
+ │        UserEncoder            │
+ │  Multi-Head Self-Attention    │
+ │  trên lịch sử đọc (50 bài)   │
+ └────┬──────────────────────────┘
+      │  user vector
+      ▼
+Dot-product với candidate news
+      │
+      ▼
+  Final Score
+```
 
-| Method | AUC | MRR | nDCG@5 | nDCG@10 |
-|--------|-----|-----|--------|---------|
-| Weighted Mean | — | — | — | — |
-| **Stacking** | **0.6890** | **0.3310** | **0.3629** | **0.4275** |
+| Thành phần | Mô tả |
+|---|---|
+| **PLMBasedNewsEncoder** | BERT/DistilBERT encode title, Additive Attention pooling → news vector |
+| **UserEncoder** | Multi-Head Self-Attention trên sequence news lịch sử → user vector |
+| **AdditiveAttention** | Attention cộng gộp để pooling sequence → single vector |
+| **NRMS** | Dot-product news candidate × user vector, CrossEntropy loss |
 
-Stacking ensemble của 3 model cho kết quả tốt nhất (+0.0097 AUC so với best single model).
+### Cài đặt & Sử dụng
+
+```bash
+cd NRMS
+
+# Cài đặt dependencies
+pip install -r requirements.txt
+
+# Download MIND dataset
+python ./dataset/download_mind.py
+
+# Train với cấu hình mặc định (DistilBERT-base)
+python src/experiment/train.py
+
+# Train với tùy chỉnh hyperparameters
+python src/experiment/train.py \
+    pretrained="bert-base-uncased" \
+    npratio=4 \
+    history_size=50 \
+    batch_size=16 \
+    gradient_accumulation_steps=8 \
+    epochs=3 \
+    learning_rate=1e-4 \
+    max_len=30
+
+# Evaluate
+python src/experiment/evaluate.py \
+    model_path="output/model/YYYY-MM-DD/HH-MM-SS/checkpoint-{step}" \
+    pretrained="distilbert-base-uncased"
+```
+
+#### Tham số quan trọng
+
+| Tham số | Mặc định | Mô tả |
+|---|---|---|
+| `pretrained` | `distilbert-base-uncased` | PLM backbone (`bert-base-uncased` hoặc `distilbert-base-uncased`) |
+| `npratio` | 4 | Tỷ lệ negative sampling |
+| `history_size` | 50 | Số bài báo trong lịch sử người dùng |
+| `batch_size` | 16 | Batch size (effective = `batch_size × gradient_accumulation_steps`) |
+| `gradient_accumulation_steps` | 8 | Tích lũy gradient (effective batch = 128) |
+| `epochs` | 1 | Số epochs |
+| `learning_rate` | 1e-4 | Learning rate |
+| `max_len` | 30 | Số token tối đa mỗi bài báo |
+
+### Kết quả trên MIND Small
+
+| Model | AUC | MRR | nDCG@5 | nDCG@10 | Thời gian train |
+|---|---|---|---|---|---|
+| Random Baseline | 0.500 | 0.201 | 0.203 | 0.267 | — |
+| **NRMS + DistilBERT-base** | **0.674** | **0.297** | **0.322** | **0.387** | 15.0h |
+| **NRMS + BERT-base** | **0.689** | **0.306** | **0.336** | **0.400** | 28.5h |
+
+_Đo trên single GPU (V100 × 1)_
+
+Xem thêm chi tiết tại [NRMS/README.md](NRMS/README.md).
+
+---
 
 ## 📁 Cấu trúc thư mục
 
@@ -363,24 +524,33 @@ MINER/
 │   ├── MINDlarge_train/
 │   ├── MINDlarge_dev/
 │   ├── MINDlarge_test/
-│   ├── train/                      # Symlink hoặc copy cho train split
-│   └── valid/                      # behaviors.tsv & news.tsv từ dev set
+│   ├── train/                      # behaviors.tsv & news.tsv (train split)
+│   └── valid/                      # behaviors.tsv & news.tsv (dev split)
 │
 ├── checkpoint/                      # Saved model checkpoints
 │   ├── bestAucModel.pt             # MINER với sapo (AUC 0.6793)
 │   ├── no_sapo/
-│   │   ├── bestAucModel.pt        # MINER không sapo
+│   │   ├── bestAucModel.pt        # MINER không sapo (AUC 0.6653)
 │   │   ├── distillroberta_5e.pt
 │   │   └── finalModel.pt
 │   └── no_encoder_no_sapo/
 │       └── finalModel.pt
 │
+├── NRMS/                            # Sub-module: NRMS (BERT/DistilBERT-based)
+│   ├── src/
+│   │   ├── recommendation/nrms/    # NRMS, PLMBasedNewsEncoder, UserEncoder
+│   │   ├── experiment/             # train.py, evaluate.py
+│   │   ├── mind/                   # MIND dataset reader
+│   │   └── config/config.py        # TrainConfig, EvalConfig
+│   ├── dataset/download_mind.py    # Download MIND dataset
+│   └── README.md                   # Chi tiết sub-module NRMS
+│
 ├── fastformer-for-rec/              # Sub-module: SpeedyRec + Fastformer model
 │   ├── train.py                    # Training SpeedyRec
 │   ├── submission.py               # Inference SpeedyRec
 │   ├── parameters.py               # Hyperparameters SpeedyRec
-│   ├── models/                     # MLNR model (TextEncoder + Fastformer UserEncoder)
-│   ├── data_handler/               # Streaming dataloader (TF-based)
+│   ├── models/                     # MLNR (TextEncoder + Fastformer UserEncoder)
+│   ├── data_handler/               # Streaming dataloader
 │   └── NOTE.md                     # Giải thích chi tiết sub-module này
 │
 ├── phase2/                          # Ensemble framework
@@ -404,6 +574,15 @@ MINER/
 │   ├── prod_to_rank.py             # Convert prod scores → rank format
 │   └── generate_truth.py           # Tạo truth.txt từ behaviors.tsv
 │
+├── asset/                           # Hình ảnh & tài liệu
+│   ├── train_hyperparams.png       # Bảng hyperparameters training
+│   ├── model_res_small_testset.png # Kết quả trên MIND Small (validation)
+│   ├── model_res_public_testset.png # Kết quả trên MIND Large (public test)
+│   ├── phase2_result.png           # Kết quả ensemble phase 2
+│   ├── phase2_result_sys.png       # Kết quả hệ thống phase 2
+│   ├── public_rank.png             # Bảng xếp hạng leaderboard
+│   └── ReSys_Final.pptx            # Slide báo cáo cuối
+│
 ├── eval/                            # Evaluation outputs (auto-generated)
 │   └── {timestamp}/
 │       ├── args.json
@@ -413,15 +592,18 @@ MINER/
     └── {timestamp}/
 ```
 
+---
+
 ## 📚 Tài liệu tham khảo
 
-### Papers
+1. **MINER**: Li et al. (2022) — [MINER: Multi-Interest Matching Network for News Recommendation](https://aclanthology.org/2022.findings-acl.29.pdf) — ACL 2022 Findings
 
-1. **MINER**: Li et al. (2022) - [MINER: Multi-Interest Matching Network for News Recommendation](https://aclanthology.org/2022.findings-acl.29.pdf) — ACL 2022 Findings
+2. **MIND Dataset**: Wu et al. (2020) — [MIND: A Large-scale Dataset for News Recommendation](https://msnews.github.io/assets/doc/ACL2020_MIND.pdf) — ACL 2020
 
-2. **MIND Dataset**: Wu et al. (2020) - [MIND: A Large-scale Dataset for News Recommendation](https://msnews.github.io/assets/doc/ACL2020_MIND.pdf) — ACL 2020
+3. **NRMS**: Wu et al. (2019) — [Neural News Recommendation with Multi-Head Self-Attention](https://aclanthology.org/D19-1671.pdf) — EMNLP 2019
 
-3. **Fastformer**: Wu et al. (2021) - [Fastformer: Additive Attention Can Be All You Need](https://arxiv.org/abs/2108.09084)
+4. **Fastformer**: Wu et al. (2021) — [Fastformer: Additive Attention Can Be All You Need](https://arxiv.org/abs/2108.09084)
 
-4. **SpeedyRec**: Liu et al. (2022) - [SpeedyRec: Efficient News Recommendation with News-history Knowledge Distillation](https://arxiv.org/abs/2205.04733)
+5. **SpeedyRec**: Liu et al. (2022) — [SpeedyRec: Efficient News Recommendation with News-history Knowledge Distillation](https://arxiv.org/abs/2205.04733)
 
+6. **Optuna**: Akiba et al. (2019) — [Optuna: A Next-generation Hyperparameter Optimization Framework](https://arxiv.org/abs/1907.10902)
