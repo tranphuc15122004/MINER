@@ -1,0 +1,27 @@
+{
+  "best_alpha": 1.0,
+  "best_auc": 0.679986535137876,
+  "weighted_weight": 1.0,
+  "stacking_weight": 0.0,
+  "wm_baseline_auc": 0.7099905095247155,
+  "stacking_baseline_auc": 0.6904356461165302,
+  "improvement_vs_wm": -0.03000397438683955,
+  "improvement_vs_stacking": -0.010449110978654197,
+  "sampling_rate": 1000,
+  "timestamp": "2026-01-10T08:13:30.915359",
+  "args": {
+    "predictions": [
+      "checkpoint/prediction_prod_Ngoc.txt",
+      "checkpoint/prediction_prod_Phuc.txt",
+      "checkpoint/prediction_prod_Son.txt"
+    ],
+    "truth": "phase2/ref/truth.txt",
+    "weighted_dir": "phase2/ensemble_results/weighted_mean",
+    "stacking_dir": "phase2/ensemble_results/stacking",
+    "alpha_min": 0.0,
+    "alpha_max": 1.0,
+    "alpha_step": 0.1,
+    "sampling_rate": 1000,
+    "output_dir": "phase2/ensemble_results/hybrid"
+  }
+}

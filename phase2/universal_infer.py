@@ -36,6 +36,7 @@ import argparse
 import os
 import sys
 import numpy as np
+import json
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -106,10 +107,12 @@ def run_stacking(df, pred_cols, model_dir, output_path):
     return preds
 
 
-def run_hybrid(df, pred_cols, weighted_dir, stacking_dir, output_path, alpha=0.5):
+def run_hybrid(df, pred_cols, weighted_dir, stacking_dir, output_path, alpha=0.5, alpha_source='default'):
     """Run Hybrid ensemble (average của WeightedMean + Stacking)"""
     print("\n" + "="*80)
-    print(f"[METHOD 3/3] HYBRID (WeightedMean + Stacking, alpha={alpha:.2f})")
+    print(f"[METHOD 3/3] HYBRID (WeightedMean + Stacking, alpha={alpha:.3f})")
+    if alpha_source != 'default':
+        print(f"Alpha source: {alpha_source}")
     print("="*80)
     
     # Load models
@@ -129,7 +132,9 @@ def run_hybrid(df, pred_cols, weighted_dir, stacking_dir, output_path, alpha=0.5
     stacking_preds = stacking_model.predict(df, pred_cols)
     
     # Hybrid: weighted average
-    print(f"Combining predictions (alpha={alpha:.2f})...")
+    print(f"Combining predictions (alpha={alpha:.3f})...")
+    print(f"  WeightedMean weight: {alpha:.1%}")
+    print(f"  Stacking weight: {1-alpha:.1%}")
     hybrid_preds = alpha * wm_preds + (1 - alpha) * stacking_preds
     
     df_out = df.copy()
@@ -195,8 +200,10 @@ Examples:
     # Methods
     parser.add_argument('--methods', default='all',
                         help='Methods to run: all, weighted, stacking, hybrid, or comma-separated (e.g., weighted,stacking)')
-    parser.add_argument('--alpha', type=float, default=0.5,
-                        help='Alpha for Hybrid method (weight for WeightedMean). Default=0.5')
+    parser.add_argument('--alpha', type=float, default=None,
+                        help='Alpha for Hybrid method (weight for WeightedMean). Default=None (load from --alpha-file or use 0.5)')
+    parser.add_argument('--alpha-file', default=None,
+                        help='JSON file containing optimal alpha (from optimize_hybrid_weights.py). Overrides --alpha if provided.')
     
     # Output
     parser.add_argument('--output-dir', required=True,
@@ -207,6 +214,21 @@ Examples:
     # Parse methods
     if args.methods == 'all':
         methods = ['weighted', 'stacking', 'hybrid']
+    
+    # Load optimal alpha if provided
+    alpha_source = 'default'
+    if args.alpha_file:
+        print(f"\n📊 Loading optimal alpha from {args.alpha_file}...")
+        with open(args.alpha_file, 'r') as f:
+            alpha_config = json.load(f)
+        args.alpha = alpha_config['best_alpha']
+        alpha_source = args.alpha_file
+        print(f"✓ Loaded optimal alpha: {args.alpha:.3f}")
+        print(f"  (AUC on validation: {alpha_config['best_auc']:.4f})")
+    elif args.alpha is None:
+        args.alpha = 0.5
+        alpha_source = 'default'
+        print(f"\n⚠️  No alpha specified, using default: {args.alpha:.3f}")
     else:
         methods = [m.strip() for m in args.methods.split(',')]
     
@@ -241,7 +263,9 @@ Examples:
     print(f"Methods to run: {', '.join(methods)}")
     print(f"Output directory: {args.output_dir}")
     if 'hybrid' in methods:
-        print(f"Hybrid alpha: {args.alpha:.2f} (WeightedMean={args.alpha:.0%}, Stacking={1-args.alpha:.0%})")
+        print(f"Hybrid alpha: {args.alpha:.3f} (WeightedMean={args.alpha:.1%}, Stacking={1-args.alpha:.1%})")
+        if alpha_source != 'default':
+            print(f"Alpha source: {alpha_source}")
     print("="*80)
     
     # Load predictions
@@ -258,7 +282,7 @@ Examples:
         print(f"✓ AUC will be computed for each method")
     else:
         print(f"✓ Inference-only mode (no ground truth)")
-        print(f"✓ Only predictions will be generated")
+        print(f"✓ Only predictions will b, alpha_source=alpha_sourcee generated")
     
     # Run methods
     results = {}
@@ -296,7 +320,9 @@ Examples:
         print(f"    - Prod: {args.output_dir}/prediction_stacking_prod.txt")
     
     if 'hybrid' in methods:
-        print(f"  [Hybrid (alpha={args.alpha:.2f})]")
+        print(f"  [Hybrid (alpha={args.alpha:.3f}: WM={args.alpha:.1%}, Stack={1-args.alpha:.1%})]")
+        if alpha_source != 'default':
+            print(f"    Alpha from: {alpha_source}")
         print(f"    - Rank: {args.output_dir}/prediction_hybrid_rank.txt")
         print(f"    - Prod: {args.output_dir}/prediction_hybrid_prod.txt")
     
